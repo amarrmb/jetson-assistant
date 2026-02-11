@@ -17,7 +17,7 @@ class TestWakeWordDetector:
 
     def test_simple_energy_detector(self):
         """Test energy-based detector."""
-        from jetson_speech.assistant.wakeword import SimpleEnergyDetector
+        from jetson_assistant.assistant.wakeword import SimpleEnergyDetector
 
         detector = SimpleEnergyDetector(threshold=500.0, min_frames=2)
 
@@ -32,7 +32,7 @@ class TestWakeWordDetector:
 
     def test_create_wakeword_detector(self):
         """Test factory function."""
-        from jetson_speech.assistant.wakeword import create_wakeword_detector
+        from jetson_assistant.assistant.wakeword import create_wakeword_detector
 
         # Energy detector (always available)
         detector = create_wakeword_detector(backend="energy")
@@ -48,7 +48,7 @@ class TestLLM:
 
     def test_simple_llm(self):
         """Test simple rule-based LLM."""
-        from jetson_speech.assistant.llm import SimpleLLM
+        from jetson_assistant.assistant.llm import SimpleLLM
 
         llm = SimpleLLM()
 
@@ -61,7 +61,7 @@ class TestLLM:
 
     def test_create_llm(self):
         """Test factory function."""
-        from jetson_speech.assistant.llm import create_llm
+        from jetson_assistant.assistant.llm import create_llm
 
         # Simple (always available)
         llm = create_llm(backend="simple")
@@ -77,7 +77,7 @@ class TestAudioIO:
 
     def test_audio_config(self):
         """Test audio configuration."""
-        from jetson_speech.assistant.audio_io import AudioConfig
+        from jetson_assistant.assistant.audio_io import AudioConfig
 
         config = AudioConfig(sample_rate=16000, chunk_duration_ms=100)
         assert config.chunk_size == 1600
@@ -87,7 +87,7 @@ class TestAudioIO:
 
     def test_vad_energy(self):
         """Test energy-based VAD."""
-        from jetson_speech.assistant.audio_io import VoiceActivityDetector
+        from jetson_assistant.assistant.audio_io import VoiceActivityDetector
 
         vad = VoiceActivityDetector(use_webrtc=False)
 
@@ -101,7 +101,7 @@ class TestAudioIO:
 
     def test_chime_sounds(self):
         """Test chime generation."""
-        from jetson_speech.assistant.audio_io import ChimeSounds
+        from jetson_assistant.assistant.audio_io import ChimeSounds
 
         chimes = ChimeSounds(sample_rate=24000)
 
@@ -124,7 +124,7 @@ class TestAssistantConfig:
 
     def test_default_config(self):
         """Test default configuration values."""
-        from jetson_speech.assistant.core import AssistantConfig
+        from jetson_assistant.assistant.core import AssistantConfig
 
         config = AssistantConfig()
 
@@ -137,7 +137,7 @@ class TestAssistantConfig:
 
     def test_custom_config(self):
         """Test custom configuration."""
-        from jetson_speech.assistant.core import AssistantConfig
+        from jetson_assistant.assistant.core import AssistantConfig
 
         config = AssistantConfig(
             wake_word="alexa",
@@ -159,7 +159,7 @@ class TestAssistantState:
 
     def test_state_enum(self):
         """Test state enumeration."""
-        from jetson_speech.assistant.core import AssistantState
+        from jetson_assistant.assistant.core import AssistantState
 
         assert AssistantState.IDLE.value == "idle"
         assert AssistantState.LISTENING.value == "listening"
@@ -172,7 +172,7 @@ class TestToolRegistry:
     """Tests for ToolRegistry auto-schema generation and dispatch."""
 
     def _make_registry(self):
-        from jetson_speech.assistant.tools import ToolRegistry
+        from jetson_assistant.assistant.tools import ToolRegistry
         return ToolRegistry()
 
     def test_register_and_definitions(self):
@@ -289,7 +289,7 @@ class TestDemoTools:
 
     def _make_tools(self):
         """Build a ToolRegistry and register tools the same way core.py does."""
-        from jetson_speech.assistant.tools import ToolRegistry
+        from jetson_assistant.assistant.tools import ToolRegistry
         import threading
 
         reg = ToolRegistry()

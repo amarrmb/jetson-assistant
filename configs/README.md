@@ -15,13 +15,13 @@ Pre-built configurations for different hardware tiers and pipeline variants.
 
 ```bash
 # Use a preset
-jetson-speech assistant --config configs/thor-sota.yaml
+jetson-assistant assistant --config configs/thor-sota.yaml
 
 # Override specific values from the preset
-jetson-speech assistant --config configs/thor-sota.yaml --voice am_adam
+jetson-assistant assistant --config configs/thor-sota.yaml --voice am_adam
 
 # Multiple overrides
-jetson-speech assistant --config configs/thor-sota.yaml --voice am_adam --no-stream
+jetson-assistant assistant --config configs/thor-sota.yaml --voice am_adam --no-stream
 ```
 
 ## How It Works
@@ -46,4 +46,4 @@ llm_model: "nvidia/Qwen2.5-VL-7B-Instruct-NVFP4"
 verbose: true
 ```
 
-See `AssistantConfig` in `jetson_speech/assistant/core.py` for all available fields.
+See `AssistantConfig` in `jetson_assistant/assistant/core.py` for all available fields.

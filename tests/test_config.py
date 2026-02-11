@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from jetson_speech.assistant.core import AssistantConfig
+from jetson_assistant.assistant.core import AssistantConfig
 
 # ---------------------------------------------------------------------------
 # Helpers — mirrors the logic in cli.py and core.py

@@ -15,7 +15,7 @@ class TestCameraPool:
 
     def _make_pool(self, cameras=None):
         """Create a CameraPool with a temp config file."""
-        from jetson_speech.assistant.cameras import CameraPool
+        from jetson_assistant.assistant.cameras import CameraPool
 
         tmpfile = tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w")
         if cameras:
@@ -101,7 +101,7 @@ class TestCameraPool:
 
     def test_persistence(self):
         """Add cameras, create new pool from same path, verify loaded."""
-        from jetson_speech.assistant.cameras import CameraPool
+        from jetson_assistant.assistant.cameras import CameraPool
 
         pool = self._make_pool()
         try:

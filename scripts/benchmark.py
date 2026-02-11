@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Benchmark script for jetson-speech components.
+Benchmark script for jetson-assistant components.
 Tests TTS, STT, LLM individually and measures performance.
 """
 
@@ -13,7 +13,7 @@ def test_tts():
     print("TEST 1: TTS STANDALONE PERFORMANCE")
     print("=" * 60)
 
-    from jetson_speech.tts.qwen import QwenBackend
+    from jetson_assistant.tts.qwen import QwenBackend
 
     tts = QwenBackend()
     print("Loading TTS model...")
@@ -72,7 +72,7 @@ def test_llm():
     print("TEST 2: LLM STANDALONE PERFORMANCE")
     print("=" * 60)
 
-    from jetson_speech.assistant.llm import OllamaLLM
+    from jetson_assistant.assistant.llm import OllamaLLM
 
     llm = OllamaLLM(model="phi3:mini")
     print(f"Using model: phi3:mini")
@@ -116,7 +116,7 @@ def test_llm():
 def test_comparison_with_standalone():
     """Compare our TTS with standalone qwen-tts.sh."""
     print("=" * 60)
-    print("TEST 3: COMPARISON - jetson-speech vs standalone")
+    print("TEST 3: COMPARISON - jetson-assistant vs standalone")
     print("=" * 60)
 
     import subprocess
@@ -125,8 +125,8 @@ def test_comparison_with_standalone():
     test_text = "Axe is known as The Reaper and often emerges victorious in battle."
 
     # Test our implementation
-    print("Testing jetson-speech TTS...")
-    from jetson_speech.tts.qwen import QwenBackend
+    print("Testing jetson-assistant TTS...")
+    from jetson_assistant.tts.qwen import QwenBackend
 
     tts = QwenBackend()
     tts.load()
@@ -139,7 +139,7 @@ def test_comparison_with_standalone():
     our_time = time.perf_counter() - start
     our_audio_duration = len(result.audio) / result.sample_rate
 
-    print(f"  jetson-speech TTS time: {our_time:.2f}s")
+    print(f"  jetson-assistant TTS time: {our_time:.2f}s")
     print(f"  Audio duration: {our_audio_duration:.2f}s")
     print(f"  RTF: {our_time/our_audio_duration:.2f}x")
     print()
@@ -159,7 +159,7 @@ def test_comparison_with_standalone():
 
 def main():
     print("\n" + "=" * 60)
-    print("JETSON-SPEECH BENCHMARK")
+    print("JETSON-ASSISTANT BENCHMARK")
     print("=" * 60 + "\n")
 
     # Suppress warnings

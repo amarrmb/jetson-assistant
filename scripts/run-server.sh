@@ -1,5 +1,5 @@
 #!/bin/bash
-# Jetson Speech Server startup script
+# Jetson Assistant Server startup script
 # Sets up environment for flash-attn with CUDA 12 compatibility
 
 # Add Ollama's CUDA 12 libs for flash-attn compatibility
@@ -11,4 +11,4 @@ export TRANSFORMERS_VERBOSITY=error
 export HF_HUB_DISABLE_PROGRESS_BARS=1
 
 # Run the server with all arguments passed through
-exec jetson-speech serve "$@"
+exec jetson-assistant serve "$@"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test — verifies jetson-speech installation on any device.
+# Smoke test — verifies jetson-assistant installation on any device.
 # No GPU containers, no mic/speaker required.
 #
 # Run after: git clone && pip install -e ".[dev]"
@@ -22,20 +22,20 @@ check() {
     fi
 }
 
-echo "=== jetson-speech smoke test ==="
+echo "=== jetson-assistant smoke test ==="
 echo
 
 # 1. Core import
 echo "Imports:"
 check "AssistantConfig import" \
-    python -c "from jetson_speech.assistant.core import AssistantConfig; AssistantConfig()"
+    python -c "from jetson_assistant.assistant.core import AssistantConfig; AssistantConfig()"
 
 # 2. CLI entry points
 echo "CLI entry points:"
-check "jetson-speech --help" \
-    jetson-speech --help
-check "jetson-speech assistant --help" \
-    jetson-speech assistant --help
+check "jetson-assistant --help" \
+    jetson-assistant --help
+check "jetson-assistant assistant --help" \
+    jetson-assistant assistant --help
 
 # 3. Config presets load correctly
 echo "Config presets:"
@@ -43,7 +43,7 @@ for preset in configs/*.yaml; do
     name=$(basename "$preset")
     check "Load $name" \
         python -c "
-from jetson_speech.assistant.core import AssistantConfig
+from jetson_assistant.assistant.core import AssistantConfig
 data = AssistantConfig.from_yaml('$preset')
 AssistantConfig(**data)
 "

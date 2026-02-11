@@ -1,6 +1,6 @@
 # Voice Assistant Guide
 
-Build your own Alexa-like voice assistant using Jetson Speech.
+Build your own Alexa-like voice assistant using Jetson Assistant.
 
 ## Overview
 
@@ -15,7 +15,7 @@ The voice assistant combines:
 ### 1. Install Dependencies
 
 ```bash
-pip install jetson-speech[assistant,qwen,whisper]
+pip install jetson-assistant[assistant,qwen,whisper]
 ```
 
 ### 2. Install Ollama (Local LLM)
@@ -31,13 +31,13 @@ ollama pull llama3.2:3b
 ### 3. Run the Assistant
 
 ```bash
-jetson-speech assistant --wake-word hey_jarvis --llm-model llama3.2:3b
+jetson-assistant assistant --wake-word hey_jarvis --llm-model llama3.2:3b
 ```
 
 ## CLI Options
 
 ```bash
-jetson-speech assistant [OPTIONS]
+jetson-assistant assistant [OPTIONS]
 
 Options:
   -w, --wake-word TEXT     Wake word (default: hey_jarvis)
@@ -57,13 +57,13 @@ Options:
 
 ```bash
 # Default settings
-jetson-speech assistant
+jetson-assistant assistant
 
 # Custom wake word and voice
-jetson-speech assistant --wake-word alexa --voice ryan
+jetson-assistant assistant --wake-word alexa --voice ryan
 
 # Without wake word (push-to-talk style)
-jetson-speech assistant --no-wake
+jetson-assistant assistant --no-wake
 ```
 
 ### With Cloud LLM
@@ -71,25 +71,25 @@ jetson-speech assistant --no-wake
 ```bash
 # OpenAI (requires OPENAI_API_KEY)
 export OPENAI_API_KEY=sk-...
-jetson-speech assistant --llm openai --llm-model gpt-4o-mini
+jetson-assistant assistant --llm openai --llm-model gpt-4o-mini
 
 # Anthropic (requires ANTHROPIC_API_KEY)
 export ANTHROPIC_API_KEY=sk-...
-jetson-speech assistant --llm anthropic --llm-model claude-3-haiku-20240307
+jetson-assistant assistant --llm anthropic --llm-model claude-3-haiku-20240307
 ```
 
 ### Testing Without LLM
 
 ```bash
 # Simple rule-based responses (no LLM needed)
-jetson-speech assistant --llm simple
+jetson-assistant assistant --llm simple
 ```
 
 ## Python API
 
 ```python
-from jetson_speech import Engine
-from jetson_speech.assistant import VoiceAssistant, AssistantConfig
+from jetson_assistant import Engine
+from jetson_assistant.assistant import VoiceAssistant, AssistantConfig
 
 # Initialize engine
 engine = Engine()
@@ -156,7 +156,7 @@ config = AssistantConfig(
 ### OpenWakeWord (Default, Open Source)
 
 ```python
-from jetson_speech.assistant.wakeword import OpenWakeWordDetector
+from jetson_assistant.assistant.wakeword import OpenWakeWordDetector
 
 # Built-in wake words
 detector = OpenWakeWordDetector(wake_word="hey_jarvis")  # or "alexa", "hey_mycroft"
@@ -175,7 +175,7 @@ pip install pvporcupine
 ```
 
 ```python
-from jetson_speech.assistant.wakeword import PorcupineDetector
+from jetson_assistant.assistant.wakeword import PorcupineDetector
 
 detector = PorcupineDetector(wake_word="jarvis")
 ```
@@ -183,7 +183,7 @@ detector = PorcupineDetector(wake_word="jarvis")
 ### Energy-Based (No Wake Word)
 
 ```python
-from jetson_speech.assistant.wakeword import SimpleEnergyDetector
+from jetson_assistant.assistant.wakeword import SimpleEnergyDetector
 
 # Triggers on any speech
 detector = SimpleEnergyDetector(threshold=500.0)
@@ -202,7 +202,7 @@ ollama pull mistral       # Good alternative
 ### OpenAI
 
 ```python
-from jetson_speech.assistant.llm import OpenAILLM
+from jetson_assistant.assistant.llm import OpenAILLM
 
 llm = OpenAILLM(
     model="gpt-4o-mini",
@@ -213,7 +213,7 @@ llm = OpenAILLM(
 ### Anthropic (Claude)
 
 ```python
-from jetson_speech.assistant.llm import AnthropicLLM
+from jetson_assistant.assistant.llm import AnthropicLLM
 
 llm = AnthropicLLM(
     model="claude-3-haiku-20240307",
@@ -272,7 +272,7 @@ curl http://localhost:11434/api/version
   ```
 - Try the energy detector for testing:
   ```bash
-  jetson-speech assistant --no-wake
+  jetson-assistant assistant --no-wake
   ```
 
 ### Slow responses
@@ -286,7 +286,7 @@ curl http://localhost:11434/api/version
 
 Enable verbose mode to identify bottleneck:
 ```bash
-jetson-speech assistant --verbose
+jetson-assistant assistant --verbose
 ```
 
 Output shows timing for each stage:

@@ -9,7 +9,7 @@ This example shows how to use different LLM backends:
 - Simple (rule-based, no LLM needed)
 
 Requirements:
-    pip install jetson-speech[assistant,qwen,whisper]
+    pip install jetson-assistant[assistant,qwen,whisper]
 
     # For Ollama:
     ollama pull llama3.2:3b
@@ -30,9 +30,9 @@ Usage:
 
 import argparse
 
-from jetson_speech import Engine
-from jetson_speech.assistant import VoiceAssistant, AssistantConfig
-from jetson_speech.assistant.llm import create_llm
+from jetson_assistant import Engine
+from jetson_assistant.assistant import VoiceAssistant, AssistantConfig
+from jetson_assistant.assistant.llm import create_llm
 
 
 # Custom personalities

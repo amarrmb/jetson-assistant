@@ -4,7 +4,7 @@ test:  ## Run unit tests (no GPU, no hardware needed)
 	python -m pytest tests/ -v
 
 lint:  ## Run ruff linter
-	ruff check jetson_speech/ tests/
+	ruff check jetson_assistant/ tests/
 
 validate:  ## Validate docker-compose.yml (needs docker installed)
 	docker compose config -q

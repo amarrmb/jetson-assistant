@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client():
     """Create test client."""
-    from jetson_speech.server.app import create_app
+    from jetson_assistant.server.app import create_app
 
     app = create_app()
     return TestClient(app)

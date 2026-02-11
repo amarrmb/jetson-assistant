@@ -1,3 +1,3 @@
 """
-Gradio web UI for Jetson Speech.
+Gradio web UI for Jetson Assistant.
 """

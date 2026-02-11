@@ -9,7 +9,7 @@
 #   pip install -e ".[kokoro,nemotron,assistant,vision]"
 #
 # Usage:
-#   jetson-speech assistant --config configs/orin-agx.yaml
+#   jetson-assistant assistant --config configs/orin-agx.yaml
 
 # TTS: Kokoro (in-process, near-human quality)
 tts_backend: kokoro

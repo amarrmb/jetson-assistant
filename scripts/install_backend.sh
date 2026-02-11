@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Install specific backends for Jetson Speech
+# Install specific backends for Jetson Assistant
 #
 # Usage:
 #   ./install_backend.sh qwen     # Install Qwen TTS
@@ -103,7 +103,7 @@ install_all() {
 
 show_help() {
     cat << EOF
-Install specific backends for Jetson Speech
+Install specific backends for Jetson Assistant
 
 Usage: $0 <backend>
 

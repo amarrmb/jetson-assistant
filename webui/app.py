@@ -1,5 +1,5 @@
 """
-Gradio web interface for Jetson Speech.
+Gradio web interface for Jetson Assistant.
 
 Provides a user-friendly interface for TTS and STT operations.
 """
@@ -15,13 +15,13 @@ except ImportError:
 def create_gradio_app():
     """Create the Gradio application."""
     if gr is None:
-        raise ImportError("Gradio not installed. Install with: pip install jetson-speech[webui]")
+        raise ImportError("Gradio not installed. Install with: pip install jetson-assistant[webui]")
 
-    from jetson_speech import __version__
-    from jetson_speech.core.audio import audio_to_bytes
-    from jetson_speech.core.engine import Engine
-    from jetson_speech.stt.registry import list_stt_backends
-    from jetson_speech.tts.registry import list_tts_backends
+    from jetson_assistant import __version__
+    from jetson_assistant.core.audio import audio_to_bytes
+    from jetson_assistant.core.engine import Engine
+    from jetson_assistant.stt.registry import list_stt_backends
+    from jetson_assistant.tts.registry import list_tts_backends
 
     # Global engine instance
     engine = Engine()
@@ -97,8 +97,8 @@ def create_gradio_app():
 
     # === Build Interface ===
 
-    with gr.Blocks(title=f"Jetson Speech v{__version__}") as app:
-        gr.Markdown(f"# Jetson Speech v{__version__}")
+    with gr.Blocks(title=f"Jetson Assistant v{__version__}") as app:
+        gr.Markdown(f"# Jetson Assistant v{__version__}")
         gr.Markdown("Modular TTS + STT server for Jetson/edge devices")
 
         with gr.Tabs():
@@ -214,7 +214,7 @@ def create_gradio_app():
                 gr.Markdown("## System Information")
 
                 def get_system_info() -> str:
-                    from jetson_speech.config import get_jetson_power_mode, is_jetson
+                    from jetson_assistant.config import get_jetson_power_mode, is_jetson
 
                     info = []
                     info.append(f"**Version:** {__version__}")

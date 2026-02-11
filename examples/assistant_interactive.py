@@ -9,7 +9,7 @@ This example shows programmatic control of the assistant:
 - Run in background
 
 Requirements:
-    pip install jetson-speech[assistant,qwen,whisper]
+    pip install jetson-assistant[assistant,qwen,whisper]
     ollama pull llama3.2:3b
 
 Usage:
@@ -18,8 +18,8 @@ Usage:
 
 import time
 
-from jetson_speech import Engine
-from jetson_speech.assistant import VoiceAssistant, AssistantConfig
+from jetson_assistant import Engine
+from jetson_assistant.assistant import VoiceAssistant, AssistantConfig
 
 
 def main():

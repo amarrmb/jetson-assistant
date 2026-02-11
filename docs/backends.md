@@ -1,16 +1,16 @@
 # Adding Custom Backends
 
-This guide explains how to add new TTS or STT backends to Jetson Speech.
+This guide explains how to add new TTS or STT backends to Jetson Assistant.
 
 ## TTS Backend
 
 ### Step 1: Create Backend File
 
-Create a new file in `jetson_speech/tts/` (e.g., `mybackend.py`):
+Create a new file in `jetson_assistant/tts/` (e.g., `mybackend.py`):
 
 ```python
-from jetson_speech.tts.base import TTSBackend, SynthesisResult, Voice
-from jetson_speech.tts.registry import register_tts_backend
+from jetson_assistant.tts.base import TTSBackend, SynthesisResult, Voice
+from jetson_assistant.tts.registry import register_tts_backend
 
 @register_tts_backend("mybackend")
 class MyBackend(TTSBackend):
@@ -67,7 +67,7 @@ class MyBackend(TTSBackend):
 
 ### Step 2: Register in Discovery
 
-Add your backend to `jetson_speech/tts/registry.py` in `_discover_backends()`:
+Add your backend to `jetson_assistant/tts/registry.py` in `_discover_backends()`:
 
 ```python
 def _discover_backends() -> None:
@@ -75,7 +75,7 @@ def _discover_backends() -> None:
 
     # My custom backend
     try:
-        from jetson_speech.tts import mybackend  # noqa: F401
+        from jetson_assistant.tts import mybackend  # noqa: F401
     except ImportError:
         pass
 ```
@@ -91,11 +91,11 @@ mybackend = ["my-model-library>=1.0"]
 
 ## STT Backend
 
-The process is similar for STT backends. Create a file in `jetson_speech/stt/`:
+The process is similar for STT backends. Create a file in `jetson_assistant/stt/`:
 
 ```python
-from jetson_speech.stt.base import STTBackend, TranscriptionResult, TranscriptionSegment
-from jetson_speech.stt.registry import register_stt_backend
+from jetson_assistant.stt.base import STTBackend, TranscriptionResult, TranscriptionSegment
+from jetson_assistant.stt.registry import register_stt_backend
 
 @register_stt_backend("mybackend")
 class MySTTBackend(STTBackend):
@@ -154,7 +154,7 @@ def stream(
     **kwargs,
 ) -> Iterator[SynthesisResult]:
     """Stream audio chunks."""
-    from jetson_speech.core.text import split_into_chunks
+    from jetson_assistant.core.text import split_into_chunks
 
     chunks = split_into_chunks(text, by_sentence=True)
 
@@ -187,7 +187,7 @@ Create tests in `tests/test_mybackend.py`:
 
 ```python
 import pytest
-from jetson_speech.tts.registry import get_tts_backend
+from jetson_assistant.tts.registry import get_tts_backend
 
 def test_backend_loads():
     backend = get_tts_backend("mybackend")

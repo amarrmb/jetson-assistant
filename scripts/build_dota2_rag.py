@@ -20,8 +20,8 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from jetson_speech.rag import RAGPipeline, WebLoader
-from jetson_speech.rag.loaders import Document
+from jetson_assistant.rag import RAGPipeline, WebLoader
+from jetson_assistant.rag.loaders import Document
 
 
 def fetch_opendota_heroes() -> list[Document]:

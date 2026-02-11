@@ -1,4 +1,4 @@
-# Jetson Speech
+# Jetson Assistant
 
 Modular TTS (Text-to-Speech) + STT (Speech-to-Text) server for Jetson and edge devices.
 
@@ -38,8 +38,8 @@ Modular TTS (Text-to-Speech) + STT (Speech-to-Text) server for Jetson and edge d
 
 ```bash
 # Clone the repository
-git clone https://github.com/baskd/jetson-speech.git
-cd jetson-speech
+git clone https://github.com/amarrmb/jetson-assistant.git
+cd jetson-assistant
 
 # Install with pip (basic)
 pip install -e .
@@ -68,19 +68,19 @@ pip install -e ".[all]"            # Everything
 
 ```bash
 # Text-to-Speech
-jetson-speech tts "Hello world"
-jetson-speech tts "Hello" --backend qwen --voice serena
-jetson-speech tts -f document.pdf -o output.wav
+jetson-assistant tts "Hello world"
+jetson-assistant tts "Hello" --backend qwen --voice serena
+jetson-assistant tts -f document.pdf -o output.wav
 
 # Speech-to-Text
-jetson-speech stt audio.wav
-jetson-speech stt audio.wav --backend whisper --model base
+jetson-assistant stt audio.wav
+jetson-assistant stt audio.wav --backend whisper --model base
 
 # Start the server
-jetson-speech serve --port 8080
+jetson-assistant serve --port 8080
 
 # Run benchmarks
-jetson-speech benchmark tts --text "Hello world" --backends qwen,piper
+jetson-assistant benchmark tts --text "Hello world" --backends qwen,piper
 ```
 
 ### Voice Assistant
@@ -96,20 +96,20 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3.2:3b
 
 # Run the assistant
-jetson-speech assistant --wake-word hey_jarvis
+jetson-assistant assistant --wake-word hey_jarvis
 ```
 
 Options:
 ```bash
 # Custom wake word and voice
-jetson-speech assistant --wake-word alexa --voice ryan
+jetson-assistant assistant --wake-word alexa --voice ryan
 
 # Use OpenAI instead of local LLM
 export OPENAI_API_KEY=sk-...
-jetson-speech assistant --llm openai --llm-model gpt-4o-mini
+jetson-assistant assistant --llm openai --llm-model gpt-4o-mini
 
 # Lightweight mode for Orin Nano 4GB
-jetson-speech assistant --tts piper --stt-model tiny --llm-model phi3:mini
+jetson-assistant assistant --tts piper --stt-model tiny --llm-model phi3:mini
 ```
 
 #### SOTA Demo (Kokoro + Nemotron + vLLM VLM)
@@ -154,7 +154,7 @@ Register RTSP security cameras and USB cameras by name, then query or monitor th
 ```bash
 pip install -e ".[kokoro,nemotron,assistant,vision]"
 
-jetson-speech assistant \
+jetson-assistant assistant \
     --tts kokoro --stt nemotron \
     --llm vllm --llm-host http://localhost:8001/v1 \
     --vision --no-wake \
@@ -192,7 +192,7 @@ Store personal or domain-specific information in a local ChromaDB collection. Th
 pip install chromadb sentence-transformers
 
 # Launch with knowledge base
-jetson-speech assistant \
+jetson-assistant assistant \
     --tts kokoro --stt nemotron \
     --llm vllm --llm-host http://localhost:8001/v1 \
     --knowledge personal --no-wake
@@ -211,7 +211,7 @@ Push camera alerts to all connected clients (future mobile app, web console) via
 ./aether-hub -port 8000
 
 # Launch assistant with Hub connection
-jetson-speech assistant \
+jetson-assistant assistant \
     --tts kokoro --stt nemotron \
     --llm vllm --llm-host http://localhost:8001/v1 \
     --vision --no-wake \
@@ -224,7 +224,7 @@ When a watch detects something, the assistant both speaks the alert and publishe
 
 Start the server:
 ```bash
-jetson-speech serve --port 8080
+jetson-assistant serve --port 8080
 ```
 
 #### TTS Endpoints
@@ -265,8 +265,8 @@ ws.onmessage = (event) => {
 ### Python API
 
 ```python
-from jetson_speech import Engine
-from jetson_speech.tts import QwenBackend
+from jetson_assistant import Engine
+from jetson_assistant.tts import QwenBackend
 
 # Initialize engine
 engine = Engine()
@@ -287,17 +287,17 @@ Environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `JETSON_SPEECH_HOST` | Server host | `0.0.0.0` |
-| `JETSON_SPEECH_PORT` | Server port | `8080` |
-| `JETSON_SPEECH_TTS_BACKEND` | Default TTS backend | `qwen` |
-| `JETSON_SPEECH_STT_BACKEND` | Default STT backend | `whisper` |
-| `JETSON_SPEECH_MODEL_CACHE` | Model cache directory | `~/.cache/jetson-speech` |
+| `JETSON_ASSISTANT_HOST` | Server host | `0.0.0.0` |
+| `JETSON_ASSISTANT_PORT` | Server port | `8080` |
+| `JETSON_ASSISTANT_TTS_BACKEND` | Default TTS backend | `qwen` |
+| `JETSON_ASSISTANT_STT_BACKEND` | Default STT backend | `whisper` |
+| `JETSON_ASSISTANT_MODEL_CACHE` | Model cache directory | `~/.cache/jetson-assistant` |
 
 ## Project Structure
 
 ```
-jetson-speech/
-├── jetson_speech/
+jetson-assistant/
+├── jetson_assistant/
 │   ├── core/           # Text extraction, audio processing
 │   ├── tts/            # TTS backends (kokoro, qwen, piper)
 │   ├── stt/            # STT backends (nemotron, whisper, vllm)
@@ -345,7 +345,7 @@ Individual commands (if you prefer not to use `make`):
 
 ```bash
 python -m pytest tests/ -v          # unit tests
-ruff check jetson_speech/ tests/    # lint
+ruff check jetson_assistant/ tests/    # lint
 docker compose config -q            # compose validation
 bash scripts/smoke-test.sh          # smoke test
 ```
@@ -354,13 +354,13 @@ bash scripts/smoke-test.sh          # smoke test
 
 ```bash
 # Compare TTS backends
-jetson-speech benchmark tts \
+jetson-assistant benchmark tts \
   --text "The quick brown fox jumps over the lazy dog." \
   --backends qwen,piper \
   --iterations 5
 
 # Compare STT backends
-jetson-speech benchmark stt \
+jetson-assistant benchmark stt \
   --audio test.wav \
   --backends whisper \
   --models tiny,base,small

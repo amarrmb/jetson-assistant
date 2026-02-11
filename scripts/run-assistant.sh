@@ -11,4 +11,4 @@ export TRANSFORMERS_VERBOSITY=error
 export HF_HUB_DISABLE_PROGRESS_BARS=1
 
 # Run the assistant with all arguments passed through
-exec jetson-speech assistant "$@"
+exec jetson-assistant assistant "$@"

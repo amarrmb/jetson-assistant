@@ -1,3 +1,3 @@
 """
-Tests for Jetson Speech.
+Tests for Jetson Assistant.
 """

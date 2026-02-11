@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jetson_speech.assistant.vision import WatchCondition
+from jetson_assistant.assistant.vision import WatchCondition
 
 
 def _make_condition(desc="test condition"):
@@ -24,7 +24,7 @@ def _make_condition(desc="test condition"):
 
 def _make_pool_with_camera(name="test_cam"):
     """Create a CameraPool with a mock camera that returns frames."""
-    from jetson_speech.assistant.cameras import CameraPool
+    from jetson_assistant.assistant.cameras import CameraPool
 
     tmpfile = tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w")
     json.dump([{"name": name, "url": "usb:0"}], tmpfile)
@@ -41,7 +41,7 @@ class TestMultiWatchMonitor:
 
     def _make_monitor(self, pool=None, check_fn=None, on_detected=None,
                       poll_interval=0.1, cooldown_s=0.5):
-        from jetson_speech.assistant.multi_watch import MultiWatchMonitor
+        from jetson_assistant.assistant.multi_watch import MultiWatchMonitor
 
         if pool is None:
             pool, self._tmpfile = _make_pool_with_camera()

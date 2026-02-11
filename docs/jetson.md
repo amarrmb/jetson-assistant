@@ -1,6 +1,6 @@
 # Jetson Setup Guide
 
-This guide covers setting up Jetson Speech on NVIDIA Jetson devices.
+This guide covers setting up Jetson Assistant on NVIDIA Jetson devices.
 
 ## Supported Devices
 
@@ -38,8 +38,8 @@ sudo apt-get install -y \
 ### Quick Install
 
 ```bash
-git clone https://github.com/baskd/jetson-speech.git
-cd jetson-speech
+git clone https://github.com/amarrmb/jetson-assistant.git
+cd jetson-assistant
 ./scripts/install_jetson.sh
 ```
 
@@ -60,7 +60,7 @@ pip install torch torchvision torchaudio \
     --index-url https://developer.download.nvidia.com/compute/redist/jp/v60
 ```
 
-3. Install Jetson Speech:
+3. Install Jetson Assistant:
 
 ```bash
 pip install -e ".[qwen,whisper]"
@@ -129,7 +129,7 @@ tegrastats
 For memory-constrained devices, use smaller models or CPU fallback:
 
 ```python
-from jetson_speech import Engine
+from jetson_assistant import Engine
 
 engine = Engine()
 
@@ -145,20 +145,20 @@ engine.load_tts_backend("piper")
 ### Create systemd Service
 
 ```bash
-sudo nano /etc/systemd/system/jetson-speech.service
+sudo nano /etc/systemd/system/jetson-assistant.service
 ```
 
 ```ini
 [Unit]
-Description=Jetson Speech Server
+Description=Jetson Assistant Server
 After=network.target
 
 [Service]
 Type=simple
 User=YOUR_USERNAME
-WorkingDirectory=/home/YOUR_USERNAME/jetson-speech
-Environment=PATH=/home/YOUR_USERNAME/jetson-speech/.venv/bin
-ExecStart=/home/YOUR_USERNAME/jetson-speech/.venv/bin/jetson-speech serve --port 8080
+WorkingDirectory=/home/YOUR_USERNAME/jetson-assistant
+Environment=PATH=/home/YOUR_USERNAME/jetson-assistant/.venv/bin
+ExecStart=/home/YOUR_USERNAME/jetson-assistant/.venv/bin/jetson-assistant serve --port 8080
 Restart=always
 RestartSec=10
 
@@ -169,9 +169,9 @@ WantedBy=multi-user.target
 ### Enable and Start
 
 ```bash
-sudo systemctl enable jetson-speech
-sudo systemctl start jetson-speech
-sudo systemctl status jetson-speech
+sudo systemctl enable jetson-assistant
+sudo systemctl start jetson-assistant
+sudo systemctl status jetson-assistant
 ```
 
 ## Troubleshooting
@@ -186,7 +186,7 @@ nvidia-smi  # Not available on Jetson, use tegrastats instead
 tegrastats
 
 # Use smaller model
-jetson-speech tts "Hello" --model 0.6B
+jetson-assistant tts "Hello" --model 0.6B
 ```
 
 ### Audio Not Playing
@@ -203,7 +203,7 @@ speaker-test -t wav -c 2
 
 ### Slow First Run
 
-Model download and caching takes time on first run. Models are cached in `~/.cache/jetson-speech/`.
+Model download and caching takes time on first run. Models are cached in `~/.cache/jetson-assistant/`.
 
 ### Permission Denied (GPU)
 

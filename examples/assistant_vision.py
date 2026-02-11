@@ -7,7 +7,7 @@ The assistant can "see" through a USB camera and answer questions about
 what it observes, using a vision-language model (VLM) via Ollama.
 
 Requirements:
-    pip install jetson-speech[assistant,whisper,vision]
+    pip install jetson-assistant[assistant,whisper,vision]
     ollama pull moondream  # or llama3.2-vision:11b
 
 Usage:
@@ -18,7 +18,7 @@ Usage:
 
 import argparse
 
-from jetson_speech.assistant import VoiceAssistant, AssistantConfig
+from jetson_assistant.assistant import VoiceAssistant, AssistantConfig
 
 
 def main():
@@ -38,7 +38,7 @@ def main():
 
     engine = None
     if not args.server:
-        from jetson_speech.core.engine import Engine
+        from jetson_assistant.core.engine import Engine
 
         engine = Engine()
         print("Loading TTS (piper)...")

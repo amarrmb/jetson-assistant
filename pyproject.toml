@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "jetson-speech"
+name = "jetson-assistant"
 version = "0.1.0"
 description = "Modular TTS + STT server for Jetson/edge devices"
 readme = "README.md"
@@ -45,6 +45,9 @@ qwen = [
     "qwen-tts",
     "torch>=2.0.0",
     "huggingface-hub>=0.20.0",
+]
+qwen-flash = [
+    "jetson-assistant[qwen]",
     "flash-attn>=2.0.0",
 ]
 piper = [
@@ -110,20 +113,20 @@ dev = [
 
 # All backends
 all = [
-    "jetson-speech[qwen,piper,kokoro,whisper,nemotron,webui,benchmark,assistant,vision,search]",
+    "jetson-assistant[qwen,piper,kokoro,whisper,nemotron,webui,benchmark,assistant,vision,search]",
 ]
 
 [project.scripts]
-jetson-speech = "jetson_speech.cli:app"
+jetson-assistant = "jetson_assistant.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/baskd/jetson-speech"
-Documentation = "https://github.com/baskd/jetson-speech#readme"
-Repository = "https://github.com/baskd/jetson-speech"
-Issues = "https://github.com/baskd/jetson-speech/issues"
+Homepage = "https://github.com/amarrmb/jetson-assistant"
+Documentation = "https://github.com/amarrmb/jetson-assistant#readme"
+Repository = "https://github.com/amarrmb/jetson-assistant"
+Issues = "https://github.com/amarrmb/jetson-assistant/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["jetson_speech", "webui"]
+packages = ["jetson_assistant", "webui"]
 
 [tool.ruff]
 line-length = 100

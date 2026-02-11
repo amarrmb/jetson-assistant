@@ -14,7 +14,7 @@ class TestTextProcessing:
 
     def test_split_into_chunks(self):
         """Test text chunking."""
-        from jetson_speech.core.text import split_into_chunks
+        from jetson_assistant.core.text import split_into_chunks
 
         text = "Hello world. How are you? I am fine."
         chunks = split_into_chunks(text, max_chars=50)
@@ -24,7 +24,7 @@ class TestTextProcessing:
 
     def test_split_by_sentence(self):
         """Test sentence-based chunking."""
-        from jetson_speech.core.text import split_into_chunks
+        from jetson_assistant.core.text import split_into_chunks
 
         text = "First sentence. Second sentence. Third sentence."
         chunks = split_into_chunks(text, by_sentence=True)
@@ -34,7 +34,7 @@ class TestTextProcessing:
 
     def test_extract_text_txt(self):
         """Test extracting text from TXT file."""
-        from jetson_speech.core.text import extract_text
+        from jetson_assistant.core.text import extract_text
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("Hello world")
@@ -45,14 +45,14 @@ class TestTextProcessing:
 
     def test_extract_text_file_not_found(self):
         """Test extraction from non-existent file."""
-        from jetson_speech.core.text import extract_text
+        from jetson_assistant.core.text import extract_text
 
         with pytest.raises(FileNotFoundError):
             extract_text("/nonexistent/file.txt")
 
     def test_clean_text_for_speech(self):
         """Test text cleaning."""
-        from jetson_speech.core.text import clean_text_for_speech
+        from jetson_assistant.core.text import clean_text_for_speech
 
         text = "Check https://example.com and email@test.com"
         cleaned = clean_text_for_speech(text)
@@ -66,7 +66,7 @@ class TestAudioProcessing:
 
     def test_concatenate_audio(self):
         """Test audio concatenation."""
-        from jetson_speech.core.audio import concatenate_audio
+        from jetson_assistant.core.audio import concatenate_audio
 
         audio1 = np.ones(1000, dtype=np.int16)
         audio2 = np.ones(1000, dtype=np.int16) * 2
@@ -81,7 +81,7 @@ class TestAudioProcessing:
 
     def test_audio_to_bytes(self):
         """Test converting audio to bytes."""
-        from jetson_speech.core.audio import audio_to_bytes
+        from jetson_assistant.core.audio import audio_to_bytes
 
         audio = np.zeros(1000, dtype=np.int16)
         wav_bytes = audio_to_bytes(audio, sample_rate=16000)
@@ -91,7 +91,7 @@ class TestAudioProcessing:
 
     def test_bytes_to_audio(self):
         """Test converting bytes to audio."""
-        from jetson_speech.core.audio import audio_to_bytes, bytes_to_audio
+        from jetson_assistant.core.audio import audio_to_bytes, bytes_to_audio
 
         original = np.arange(1000, dtype=np.int16)
         wav_bytes = audio_to_bytes(original, sample_rate=16000)
@@ -103,7 +103,7 @@ class TestAudioProcessing:
 
     def test_get_audio_duration(self):
         """Test duration calculation."""
-        from jetson_speech.core.audio import get_audio_duration
+        from jetson_assistant.core.audio import get_audio_duration
 
         audio = np.zeros(16000, dtype=np.int16)
         duration = get_audio_duration(audio, sample_rate=16000)
@@ -112,7 +112,7 @@ class TestAudioProcessing:
 
     def test_normalize_audio(self):
         """Test audio normalization."""
-        from jetson_speech.core.audio import normalize_audio
+        from jetson_assistant.core.audio import normalize_audio
 
         # Quiet audio
         audio = np.array([100, -100, 50, -50], dtype=np.int16)
@@ -127,7 +127,7 @@ class TestEngine:
 
     def test_engine_creation(self):
         """Test creating engine instance."""
-        from jetson_speech.core.engine import Engine
+        from jetson_assistant.core.engine import Engine
 
         engine = Engine()
         assert engine is not None
@@ -136,7 +136,7 @@ class TestEngine:
 
     def test_engine_info(self):
         """Test getting engine info."""
-        from jetson_speech.core.engine import Engine
+        from jetson_assistant.core.engine import Engine
 
         engine = Engine()
         info = engine.get_info()
@@ -147,7 +147,7 @@ class TestEngine:
 
     def test_synthesize_without_backend(self):
         """Test synthesis fails without backend."""
-        from jetson_speech.core.engine import Engine
+        from jetson_assistant.core.engine import Engine
 
         engine = Engine()
 
@@ -156,7 +156,7 @@ class TestEngine:
 
     def test_transcribe_without_backend(self):
         """Test transcription fails without backend."""
-        from jetson_speech.core.engine import Engine
+        from jetson_assistant.core.engine import Engine
 
         engine = Engine()
         audio = np.zeros(1000, dtype=np.int16)

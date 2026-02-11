@@ -4,7 +4,7 @@
 import sys
 sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
 
-from jetson_speech.rag import RAGPipeline
+from jetson_assistant.rag import RAGPipeline
 
 rag = RAGPipeline("dota2")
 print(f"Total chunks: {rag.count()}")

@@ -340,7 +340,7 @@ Transcribe audio file.
 ### Basic Usage
 
 ```python
-from jetson_speech import Engine
+from jetson_assistant import Engine
 
 # Create engine
 engine = Engine()

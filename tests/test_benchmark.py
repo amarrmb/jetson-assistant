@@ -4,8 +4,8 @@ Tests for benchmarking functionality.
 
 import pytest
 
-from jetson_speech.benchmark.metrics import BenchmarkMetrics, MetricsCollector
-from jetson_speech.benchmark.report import format_results
+from jetson_assistant.benchmark.metrics import BenchmarkMetrics, MetricsCollector
+from jetson_assistant.benchmark.report import format_results
 
 
 class TestBenchmarkMetrics:

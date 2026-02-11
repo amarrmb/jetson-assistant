@@ -4,8 +4,8 @@ Tests for TTS backends.
 
 import pytest
 
-from jetson_speech.tts.base import SynthesisResult, TTSBackend, Voice
-from jetson_speech.tts.registry import get_tts_backend, list_tts_backends, register_tts_backend
+from jetson_assistant.tts.base import SynthesisResult, TTSBackend, Voice
+from jetson_assistant.tts.registry import get_tts_backend, list_tts_backends, register_tts_backend
 
 
 class TestTTSBase:
@@ -102,7 +102,7 @@ class TestQwenBackend:
     def test_qwen_voices(self):
         """Test Qwen voice definitions."""
         try:
-            from jetson_speech.tts.qwen import QWEN_LANGUAGES, QWEN_SPEAKERS
+            from jetson_assistant.tts.qwen import QWEN_LANGUAGES, QWEN_SPEAKERS
         except ImportError:
             pytest.skip("Qwen TTS not installed")
 
@@ -126,7 +126,7 @@ class TestPiperBackend:
     def test_piper_voices(self):
         """Test Piper voice definitions."""
         try:
-            from jetson_speech.tts.piper import PIPER_VOICES
+            from jetson_assistant.tts.piper import PIPER_VOICES
         except ImportError:
             pytest.skip("Piper TTS not installed")
 
@@ -147,7 +147,7 @@ class TestKokoroBackend:
     def test_kokoro_voices(self):
         """Test Kokoro voice definitions."""
         try:
-            from jetson_speech.tts.kokoro import KOKORO_LANG_CODES, KOKORO_VOICES
+            from jetson_assistant.tts.kokoro import KOKORO_LANG_CODES, KOKORO_VOICES
         except ImportError:
             pytest.skip("Kokoro TTS not installed")
 

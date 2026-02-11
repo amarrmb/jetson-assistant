@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comparative benchmark for jetson-speech TTS and STT backends.
+Comparative benchmark for jetson-assistant TTS and STT backends.
 
 Produces publishable results in Markdown and JSON formats.
 Run on Jetson Thor for representative numbers.
@@ -83,7 +83,7 @@ def benchmark_tts(
     warmup: int = 1,
 ) -> list[BackendResult]:
     """Benchmark TTS backends."""
-    from jetson_speech.tts.registry import get_tts_backend, list_tts_backends
+    from jetson_assistant.tts.registry import get_tts_backend, list_tts_backends
 
     if backends is None:
         backends = [b["name"] for b in list_tts_backends()]
@@ -148,7 +148,7 @@ def benchmark_stt(
     audio_path: str | None = None,
 ) -> list[BackendResult]:
     """Benchmark STT backends."""
-    from jetson_speech.stt.registry import get_stt_backend, list_stt_backends
+    from jetson_assistant.stt.registry import get_stt_backend, list_stt_backends
 
     if backends is None:
         # Only benchmark locally-loadable backends (not vllm which needs a server)
@@ -214,7 +214,7 @@ def benchmark_stt(
 
 def format_markdown(tts_results: list[BackendResult], stt_results: list[BackendResult]) -> str:
     """Format results as publishable Markdown."""
-    lines = ["# Jetson Speech Backend Benchmarks\n"]
+    lines = ["# Jetson Assistant Backend Benchmarks\n"]
 
     if tts_results:
         lines.append("## TTS Backends\n")
@@ -287,7 +287,7 @@ def format_json(tts_results: list[BackendResult], stt_results: list[BackendResul
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Benchmark jetson-speech backends")
+    parser = argparse.ArgumentParser(description="Benchmark jetson-assistant backends")
     parser.add_argument("--tts-only", action="store_true", help="Only benchmark TTS")
     parser.add_argument("--stt-only", action="store_true", help="Only benchmark STT")
     parser.add_argument("--tts-backends", type=str, help="Comma-separated TTS backends")

@@ -9,15 +9,15 @@ Uses:
 - Phi3 mini (small but capable LLM)
 
 Requirements:
-    pip install jetson-speech[assistant,piper,whisper]
+    pip install jetson-assistant[assistant,piper,whisper]
     ollama pull phi3:mini
 
 Usage:
     python assistant_lightweight.py
 """
 
-from jetson_speech import Engine
-from jetson_speech.assistant import VoiceAssistant, AssistantConfig
+from jetson_assistant import Engine
+from jetson_assistant.assistant import VoiceAssistant, AssistantConfig
 
 
 def main():

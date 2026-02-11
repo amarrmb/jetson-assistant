@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# Quick setup script for Jetson Speech
+# Quick setup script for Jetson Assistant
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "=== Jetson Speech Setup ==="
+echo "=== Jetson Assistant Setup ==="
 
 # Check Python version
 PYTHON_VERSION=$(python3 --version 2>&1 | grep -oP '\d+\.\d+')
@@ -23,7 +23,7 @@ fi
 source .venv/bin/activate
 
 # Install
-echo "Installing jetson-speech..."
+echo "Installing jetson-assistant..."
 pip install -e .
 
 echo ""
@@ -38,4 +38,4 @@ echo "  pip install -e '.[whisper]' # STT with Whisper"
 echo "  pip install -e '.[all]'     # Everything"
 echo ""
 echo "Quick test:"
-echo "  jetson-speech info"
+echo "  jetson-assistant info"

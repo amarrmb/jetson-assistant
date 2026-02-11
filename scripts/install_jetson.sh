@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Jetson-specific installation script for Jetson Speech
+# Jetson-specific installation script for Jetson Assistant
 #
 # This script installs dependencies optimized for NVIDIA Jetson devices.
 #
@@ -95,8 +95,8 @@ install_pytorch_jetson() {
     fi
 }
 
-install_jetson_speech() {
-    log_info "Installing Jetson Speech..."
+install_jetson_assistant() {
+    log_info "Installing Jetson Assistant..."
 
     cd "$PROJECT_DIR"
 
@@ -144,7 +144,7 @@ setup_swap() {
 }
 
 main() {
-    log_info "=== Jetson Speech Installation ==="
+    log_info "=== Jetson Assistant Installation ==="
 
     # Check if running on Jetson
     if check_jetson; then
@@ -170,7 +170,7 @@ main() {
     # Install components
     install_base
     install_uv
-    install_jetson_speech
+    install_jetson_assistant
 
     # Setup recommendations
     setup_swap
@@ -181,10 +181,10 @@ main() {
     log_info "  source .venv/bin/activate"
     echo ""
     log_info "Test TTS:"
-    log_info "  jetson-speech tts \"Hello from Jetson\""
+    log_info "  jetson-assistant tts \"Hello from Jetson\""
     echo ""
     log_info "Start the server:"
-    log_info "  jetson-speech serve --port 8080"
+    log_info "  jetson-assistant serve --port 8080"
 }
 
 main "$@"

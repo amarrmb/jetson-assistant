@@ -62,6 +62,6 @@ echo "vLLM OK"
 # - VLM: vLLM Qwen2.5-VL-7B-NVFP4 (container)
 cd "$PROJECT_DIR"
 
-exec jetson-speech assistant \
+exec jetson-assistant assistant \
     --config configs/thor-sota.yaml \
     "$@"

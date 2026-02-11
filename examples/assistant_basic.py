@@ -6,20 +6,20 @@ This example shows how to create a simple voice assistant
 with wake word detection, STT, LLM, and TTS.
 
 Requirements:
-    pip install jetson-speech[assistant,qwen,whisper]
+    pip install jetson-assistant[assistant,qwen,whisper]
     ollama pull llama3.2:3b
 
 Usage:
     python assistant_basic.py
 """
 
-from jetson_speech import Engine
-from jetson_speech.assistant import VoiceAssistant, AssistantConfig
+from jetson_assistant import Engine
+from jetson_assistant.assistant import VoiceAssistant, AssistantConfig
 
 
 def main():
     # Create engine and load backends
-    print("Initializing Jetson Speech Engine...")
+    print("Initializing Jetson Assistant Engine...")
     engine = Engine()
 
     print("Loading TTS (Qwen)...")
