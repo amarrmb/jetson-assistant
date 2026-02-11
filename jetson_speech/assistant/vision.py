@@ -11,11 +11,13 @@ Requires: opencv-python-headless >= 4.8.0 (or opencv-python for --show-vision)
     pip install jetson-speech[vision]
 """
 
-import sys
+import logging
 import time
 import threading
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -69,10 +71,7 @@ class Camera:
         try:
             import cv2
         except ImportError:
-            print(
-                "OpenCV not installed. Install with: pip install opencv-python-headless",
-                file=sys.stderr,
-            )
+            logger.error("OpenCV not installed. Install with: pip install opencv-python-headless")
             return False
 
         self._cv2 = cv2
@@ -80,7 +79,7 @@ class Camera:
         try:
             self._cap = cv2.VideoCapture(self.config.device)
             if not self._cap.isOpened():
-                print(f"Failed to open camera device {self.config.device}", file=sys.stderr)
+                logger.error("Failed to open camera device %s", self.config.device)
                 self._cap = None
                 return False
 
@@ -93,11 +92,11 @@ class Camera:
 
             actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            print(f"Camera ready: device={self.config.device} ({actual_w}x{actual_h})", file=sys.stderr)
+            logger.info("Camera ready: device=%s (%dx%d)", self.config.device, actual_w, actual_h)
             return True
 
         except Exception as e:
-            print(f"Camera error: {e}", file=sys.stderr)
+            logger.error("Camera error: %s", e)
             self._cap = None
             return False
 
@@ -241,14 +240,14 @@ class VisionMonitor:
             target=self._monitor_loop, daemon=True, name="vision-monitor"
         )
         self._thread.start()
-        print(f"VisionMonitor: watching for '{condition.description}'", file=sys.stderr)
+        logger.info("VisionMonitor: watching for '%s'", condition.description)
 
     def stop_watching(self) -> None:
         """Stop the monitor thread."""
         if self._thread is not None and self._thread.is_alive():
             self._stop_event.set()
             self._thread.join(timeout=5.0)
-            print("VisionMonitor: stopped", file=sys.stderr)
+            logger.info("VisionMonitor: stopped")
         self._thread = None
         self._condition = None
 
@@ -293,7 +292,7 @@ class VisionMonitor:
                     diff = cv2.absdiff(prev_frame_gray, gray)
                     change_pct = float(np.count_nonzero(diff > 25)) / diff.size
                     if change_pct < 0.05:  # <5% pixels changed
-                        print(f"VisionMonitor: scene unchanged ({change_pct:.1%}), skipping VLM", file=sys.stderr)
+                        logger.debug("VisionMonitor: scene unchanged (%.1f%%), skipping VLM", change_pct * 100)
                         prev_frame_gray = gray
                         self._stop_event.wait(self._poll_interval)
                         continue
@@ -305,7 +304,7 @@ class VisionMonitor:
             try:
                 detected = self._check_fn(condition.prompt, frame_b64)
             except Exception as e:
-                print(f"VisionMonitor: check error: {e}", file=sys.stderr)
+                logger.error("VisionMonitor: check error: %s", e)
                 detected = False
 
             # Sliding window confidence voting
@@ -314,10 +313,9 @@ class VisionMonitor:
                 votes = votes[-self._vote_window:]
 
             positive = sum(votes)
-            print(
-                f"VisionMonitor: confidence {positive}/{len(votes)} "
-                f"(need {self._confidence_threshold}/{self._vote_window})",
-                file=sys.stderr,
+            logger.debug(
+                "VisionMonitor: confidence %d/%d (need %d/%d)",
+                positive, len(votes), self._confidence_threshold, self._vote_window,
             )
 
             if positive >= self._confidence_threshold and self._can_speak_fn():
@@ -388,7 +386,7 @@ class VisionPreview:
             target=self._preview_loop, daemon=True, name="vision-preview"
         )
         self._thread.start()
-        print(f"VisionPreview: started (window={self._show_window}, stream_port={self._stream_port})", file=sys.stderr)
+        logger.info("VisionPreview: started (window=%s, stream_port=%d)", self._show_window, self._stream_port)
 
     def stop(self) -> None:
         """Stop the preview thread and MJPEG server."""
@@ -410,7 +408,7 @@ class VisionPreview:
             except Exception:
                 pass
 
-        print("VisionPreview: stopped", file=sys.stderr)
+        logger.info("VisionPreview: stopped")
 
     def _preview_loop(self) -> None:
         """Main loop: grab frame, draw overlay, display/stream."""
@@ -500,7 +498,7 @@ class VisionPreview:
             nj = NvJpeg()
             test = np.zeros((2, 2, 3), dtype=np.uint8)
             nj.encode(test, quality)
-            print("VisionPreview: using NVJPEG hardware encoder", file=sys.stderr)
+            logger.info("VisionPreview: using NVJPEG hardware encoder")
             return lambda frame: nj.encode(frame, quality)
         except Exception:
             pass
@@ -511,14 +509,14 @@ class VisionPreview:
             tj = TurboJPEG()
             test = np.zeros((2, 2, 3), dtype=np.uint8)
             tj.encode(test, quality=quality)
-            print("VisionPreview: using TurboJPEG encoder", file=sys.stderr)
+            logger.info("VisionPreview: using TurboJPEG encoder")
             return lambda frame: tj.encode(frame, quality=quality)
         except Exception:
             pass
 
         # 3. Fallback to cv2.imencode
         import cv2
-        print("VisionPreview: using cv2 JPEG encoder", file=sys.stderr)
+        logger.info("VisionPreview: using cv2 JPEG encoder")
         params = [cv2.IMWRITE_JPEG_QUALITY, quality]
 
         def _cv2_encode(frame: np.ndarray) -> bytes:
@@ -575,4 +573,4 @@ class VisionPreview:
 
         thread = threading.Thread(target=server.serve_forever, daemon=True, name="mjpeg-server")
         thread.start()
-        print(f"VisionPreview: MJPEG server on port {self._stream_port}", file=sys.stderr)
+        logger.info("VisionPreview: MJPEG server on port %d", self._stream_port)

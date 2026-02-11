@@ -6,9 +6,11 @@ accurate English transcription. Runs natively on CUDA without
 a container — ~24ms latency on Jetson Thor.
 """
 
-import sys
+import logging
 import tempfile
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -58,7 +60,7 @@ class NemotronBackend(STTBackend):
         self._model_size = model_size
         self._device = device
 
-        print(f"Loading Nemotron Speech ({model_name})...", file=sys.stderr)
+        logger.info("Loading Nemotron Speech (%s)...", model_name)
 
         # Determine device
         if device == "auto":
@@ -80,7 +82,7 @@ class NemotronBackend(STTBackend):
         self._model.eval()
 
         self._loaded = True
-        print(f"Nemotron Speech loaded on {device}!", file=sys.stderr)
+        logger.info("Nemotron Speech loaded on %s", device)
 
     def transcribe(
         self,

@@ -13,9 +13,11 @@ Example:
     answer = rag.query("Who counters Anti-Mage?", llm=my_llm)
 """
 
-import sys
+import logging
 from pathlib import Path
 from typing import Optional, Union
+
+logger = logging.getLogger(__name__)
 
 from jetson_speech.rag.loaders import (
     BaseLoader,
@@ -88,30 +90,30 @@ Answer:"""
         """
         # Load documents
         if verbose:
-            print(f"Loading documents...", file=sys.stderr)
+            logger.info("Loading documents...")
 
         documents = loader.load_all()
 
         if verbose:
-            print(f"Loaded {len(documents)} document(s)", file=sys.stderr)
+            logger.info("Loaded %d document(s)", len(documents))
 
         # Chunk documents
         if verbose:
-            print(f"Chunking documents...", file=sys.stderr)
+            logger.info("Chunking documents...")
 
         chunks = self.chunker.chunk_documents(documents)
 
         if verbose:
-            print(f"Created {len(chunks)} chunk(s)", file=sys.stderr)
+            logger.info("Created %d chunk(s)", len(chunks))
 
         # Add to vector store
         if verbose:
-            print(f"Adding to vector store...", file=sys.stderr)
+            logger.info("Adding to vector store...")
 
         count = self.store.add(chunks)
 
         if verbose:
-            print(f"Added {count} chunk(s) to '{self.collection_name}'", file=sys.stderr)
+            logger.info("Added %d chunk(s) to '%s'", count, self.collection_name)
 
         return count
 
@@ -197,7 +199,7 @@ Answer:"""
         chunks = list(self.chunker.chunk(document))
 
         if verbose:
-            print(f"Created {len(chunks)} chunk(s) from text", file=sys.stderr)
+            logger.info("Created %d chunk(s) from text", len(chunks))
 
         return self.store.add(chunks)
 

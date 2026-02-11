@@ -4,8 +4,10 @@ LLM/Chat routes for the speech server.
 Provides chat endpoints that integrate LLM with optional RAG.
 """
 
-import sys
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -42,11 +44,11 @@ def get_llm(model: Optional[str] = None):
             # Check if model is available, pull if not
             try:
                 _llm_instance.show(model)
-                print(f"LLM ready: {model}", file=sys.stderr)
+                logger.info("LLM ready: %s", model)
             except Exception:
-                print(f"Pulling model: {model}...", file=sys.stderr)
+                logger.info("Pulling model: %s...", model)
                 _llm_instance.pull(model)
-                print(f"LLM ready: {model}", file=sys.stderr)
+                logger.info("LLM ready: %s", model)
 
         except ImportError:
             raise HTTPException(
@@ -68,7 +70,7 @@ def get_rag(collection: str):
             if rag.count() == 0:
                 return None  # Collection is empty
             _rag_instances[collection] = rag
-            print(f"RAG loaded: {collection} ({rag.count()} chunks)", file=sys.stderr)
+            logger.info("RAG loaded: %s (%d chunks)", collection, rag.count())
         except ImportError:
             return None
 

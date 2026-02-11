@@ -15,10 +15,12 @@ Usage:
         cam.close()
 """
 
+import logging
 import socket
-import sys
 import threading
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -215,10 +217,7 @@ class RemoteCamera:
     def open(self) -> bool:
         """Start UDP listener thread, return True on success."""
         if not _HAS_AV:
-            print(
-                "RemoteCamera: PyAV not installed. Install with: pip install av",
-                file=sys.stderr,
-            )
+            logger.error("RemoteCamera: PyAV not installed. Install with: pip install av")
             return False
 
         try:
@@ -227,7 +226,7 @@ class RemoteCamera:
             self._sock.bind(("127.0.0.1", self._port))
             self._sock.settimeout(1.0)
         except OSError as e:
-            print(f"RemoteCamera: bind error on port {self._port}: {e}", file=sys.stderr)
+            logger.error("RemoteCamera: bind error on port %d: %s", self._port, e)
             return False
 
         self._stop_event.clear()

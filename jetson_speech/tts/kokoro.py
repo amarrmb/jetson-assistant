@@ -5,8 +5,10 @@ Kokoro is a lightweight, near-human-quality TTS model with 82M parameters
 and 54+ voices. Outputs 24kHz audio. Requires espeak-ng system dependency.
 """
 
-import sys
+import logging
 from typing import Any, Iterator
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -133,13 +135,13 @@ class KokoroBackend(TTSBackend):
         self._lang_code = resolved_lang
         self._current_voice = voice
 
-        print(f"Loading Kokoro TTS (lang={resolved_lang}, voice={voice})...", file=sys.stderr)
+        logger.info("Loading Kokoro TTS (lang=%s, voice=%s)...", resolved_lang, voice)
 
         pipeline = KPipeline(lang_code=resolved_lang)
         self._pipelines[resolved_lang] = pipeline
 
         # Pre-load voice weights to avoid first-call delay
-        print(f"Pre-loading voice {voice}...", file=sys.stderr)
+        logger.info("Pre-loading voice %s...", voice)
         try:
             for _ in pipeline("warmup", voice=voice):
                 pass
@@ -147,7 +149,7 @@ class KokoroBackend(TTSBackend):
             pass  # Voice will download on first synthesize if this fails
 
         self._loaded = True
-        print("Kokoro model loaded!", file=sys.stderr)
+        logger.info("Kokoro model loaded")
 
     def switch_language(self, lang_code: str, voice: str | None = None) -> str:
         """Switch the active language, creating a new pipeline if needed.
@@ -170,19 +172,19 @@ class KokoroBackend(TTSBackend):
 
         # Create pipeline on first use for this language
         if resolved not in self._pipelines:
-            print(f"Kokoro: loading pipeline for lang={resolved}...", file=sys.stderr)
+            logger.info("Kokoro: loading pipeline for lang=%s...", resolved)
             pipeline = self._KPipeline(lang_code=resolved)
             self._pipelines[resolved] = pipeline
 
             # Warm up the voice
-            print(f"Kokoro: pre-loading voice {voice}...", file=sys.stderr)
+            logger.info("Kokoro: pre-loading voice %s...", voice)
             try:
                 for _ in pipeline("warmup", voice=voice):
                     pass
             except Exception:
                 pass
 
-            print(f"Kokoro: lang={resolved} ready!", file=sys.stderr)
+            logger.info("Kokoro: lang=%s ready", resolved)
 
         self._lang_code = resolved
         self._current_voice = voice

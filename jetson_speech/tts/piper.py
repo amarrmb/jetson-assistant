@@ -4,8 +4,10 @@ Piper TTS backend implementation.
 Piper is a fast, local TTS system that runs well on CPU.
 """
 
-import sys
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from typing import Any, Iterator
 
 import numpy as np
@@ -90,7 +92,7 @@ class PiperBackend(TTSBackend):
         else:
             raise ValueError(f"Unknown voice: {voice}")
 
-        print(f"Loading Piper voice: {self._voice_path.name}...", file=sys.stderr)
+        logger.info("Loading Piper voice: %s...", self._voice_path.name)
 
         self._model = PiperVoice.load(
             str(self._voice_path),
@@ -102,7 +104,7 @@ class PiperBackend(TTSBackend):
             self._sample_rate = self._model.config.sample_rate
 
         self._loaded = True
-        print("Piper model loaded!", file=sys.stderr)
+        logger.info("Piper model loaded")
 
     def _download_voice(self, voice: str) -> tuple[Path, Path]:
         """Download voice model if not cached."""
@@ -116,11 +118,11 @@ class PiperBackend(TTSBackend):
         config_path = cache_dir / f"{voice}.onnx.json"
 
         if not model_path.exists():
-            print(f"Downloading {voice} model...", file=sys.stderr)
+            logger.info("Downloading %s model...", voice)
             urllib.request.urlretrieve(voice_info["url"], model_path)
 
         if not config_path.exists() and "config_url" in voice_info:
-            print(f"Downloading {voice} config...", file=sys.stderr)
+            logger.info("Downloading %s config...", voice)
             urllib.request.urlretrieve(voice_info["config_url"], config_path)
 
         return model_path, config_path

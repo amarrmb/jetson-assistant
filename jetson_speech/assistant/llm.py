@@ -9,8 +9,10 @@ Supports:
 """
 
 import json
-import sys
+import logging
 from abc import ABC, abstractmethod
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -110,14 +112,14 @@ class OllamaLLM(LLMBackend):
                 from jetson_speech.rag import RAGPipeline
                 self.rag = RAGPipeline(collection_name=rag_collection)
                 if self.rag.count() > 0:
-                    print(f"RAG enabled: {rag_collection} ({self.rag.count()} chunks)", file=sys.stderr)
+                    logger.info("RAG enabled: %s (%d chunks)", rag_collection, self.rag.count())
                     self.system_prompt = system_prompt or self.RAG_SYSTEM_PROMPT
                 else:
-                    print(f"RAG collection '{rag_collection}' is empty. Run build script first.", file=sys.stderr)
+                    logger.warning("RAG collection '%s' is empty. Run build script first.", rag_collection)
                     self.rag = None
                     self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
             except ImportError as e:
-                print(f"RAG not available: {e}", file=sys.stderr)
+                logger.warning("RAG not available: %s", e)
                 self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
         else:
             self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
@@ -125,11 +127,11 @@ class OllamaLLM(LLMBackend):
         # Check if model is available
         try:
             self._client.show(model)
-            print(f"Ollama LLM ready: {model}", file=sys.stderr)
+            logger.info("Ollama LLM ready: %s", model)
         except Exception:
-            print(f"Model '{model}' not found. Pulling...", file=sys.stderr)
+            logger.info("Model '%s' not found. Pulling...", model)
             self._client.pull(model)
-            print(f"Ollama LLM ready: {model}", file=sys.stderr)
+            logger.info("Ollama LLM ready: %s", model)
 
     def check_condition(self, prompt: str, image_b64: str) -> bool:
         """
@@ -161,10 +163,10 @@ class OllamaLLM(LLMBackend):
             )
             latency = (time.perf_counter() - start) * 1000
             answer = response["message"]["content"].strip().upper()
-            print(f"  [VisionMonitor check: {answer} ({latency:.0f}ms)]", file=sys.stderr)
+            logger.debug("VisionMonitor check: %s (%.0fms)", answer, latency)
             return answer.startswith("YES")
         except Exception as e:
-            print(f"  [VisionMonitor check error: {e}]", file=sys.stderr)
+            logger.error("VisionMonitor check error: %s", e)
             return False
 
     def generate(
@@ -298,7 +300,7 @@ class OllamaLLM(LLMBackend):
                         yield sentence
 
         except Exception as e:
-            print(f"LLM stream error: {e}", file=sys.stderr)
+            logger.error("LLM stream error: %s", e)
 
         # Yield any remaining text (even very short responses like "Blue")
         if buffer.strip():
@@ -351,7 +353,7 @@ Keep responses concise (1-3 sentences). Speak naturally without formatting."""
         self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
         self._client = OpenAI(api_key=api_key)
 
-        print(f"OpenAI LLM ready: {model}", file=sys.stderr)
+        logger.info("OpenAI LLM ready: %s", model)
 
     def generate(
         self, prompt: str, context: Optional[list[dict]] = None, images: Optional[list[str]] = None
@@ -360,7 +362,7 @@ Keep responses concise (1-3 sentences). Speak naturally without formatting."""
         import time
 
         if images:
-            print("Warning: OpenAI vision not implemented, images ignored", file=sys.stderr)
+            logger.warning("OpenAI vision not implemented, images ignored")
 
         messages = [{"role": "system", "content": self.system_prompt}]
 
@@ -427,7 +429,7 @@ Keep responses concise (1-3 sentences). Speak naturally without formatting."""
         self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
         self._client = anthropic.Anthropic(api_key=api_key)
 
-        print(f"Anthropic LLM ready: {model}", file=sys.stderr)
+        logger.info("Anthropic LLM ready: %s", model)
 
     def generate(
         self, prompt: str, context: Optional[list[dict]] = None, images: Optional[list[str]] = None
@@ -436,7 +438,7 @@ Keep responses concise (1-3 sentences). Speak naturally without formatting."""
         import time
 
         if images:
-            print("Warning: Anthropic vision not implemented, images ignored", file=sys.stderr)
+            logger.warning("Anthropic vision not implemented, images ignored")
 
         messages = []
         if context:
@@ -502,15 +504,15 @@ class VLLMLLM(LLMBackend):
             models = self._client.models.list()
             available = [m.id for m in models.data]
             if model not in available and available:
-                print(f"vLLM models available: {available}", file=sys.stderr)
+                logger.info("vLLM models available: %s", available)
                 # Use first available model if specified one isn't found
                 if len(available) == 1:
                     self.model = available[0]
-                    print(f"Using: {self.model}", file=sys.stderr)
-            print(f"vLLM ready: {self.model} at {host}", file=sys.stderr)
+                    logger.info("Using: %s", self.model)
+            logger.info("vLLM ready: %s at %s", self.model, host)
         except Exception as e:
-            print(f"vLLM warning: could not reach {host}: {e}", file=sys.stderr)
-            print("Make sure vLLM server is running.", file=sys.stderr)
+            logger.warning("vLLM warning: could not reach %s: %s", host, e)
+            logger.warning("Make sure vLLM server is running.")
 
     @staticmethod
     def _build_content(text: str, images: Optional[list[str]] = None) -> list[dict] | str:
@@ -549,10 +551,10 @@ class VLLMLLM(LLMBackend):
             )
             latency = (time.perf_counter() - start) * 1000
             answer = response.choices[0].message.content.strip().upper()
-            print(f"  [VisionMonitor check: {answer} ({latency:.0f}ms)]", file=sys.stderr)
+            logger.debug("VisionMonitor check: %s (%.0fms)", answer, latency)
             return answer.startswith("YES")
         except Exception as e:
-            print(f"  [VisionMonitor check error: {e}]", file=sys.stderr)
+            logger.error("VisionMonitor check error: %s", e)
             return False
 
     def classify_intent(self, text: str, prompt: str) -> Optional[str]:
@@ -704,7 +706,7 @@ class VLLMLLM(LLMBackend):
                         yield sentence
 
         except Exception as e:
-            print(f"vLLM stream error: {e}", file=sys.stderr)
+            logger.error("vLLM stream error: %s", e)
 
         if buffer.strip():
             yield buffer.strip()
@@ -741,7 +743,7 @@ class SimpleLLM(LLMBackend):
 
     def __init__(self):
         self.system_prompt = ""
-        print("Using simple rule-based responses (no LLM)", file=sys.stderr)
+        logger.info("Using simple rule-based responses (no LLM)")
 
     def generate(
         self, prompt: str, context: Optional[list[dict]] = None, images: Optional[list[str]] = None

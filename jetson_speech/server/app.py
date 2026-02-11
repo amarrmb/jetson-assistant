@@ -2,6 +2,7 @@
 FastAPI application for Jetson Speech server.
 """
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -25,11 +26,13 @@ def get_engine() -> Engine:
     return _engine
 
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     import os
-    import sys
 
     # Startup
     config = get_config()
@@ -42,21 +45,21 @@ async def lifespan(app: FastAPI):
 
     # Preload TTS backend if specified
     if preload_tts:
-        print(f"Preloading TTS backend: {preload_tts}...", file=sys.stderr)
+        logger.info("Preloading TTS backend: %s...", preload_tts)
         engine.load_tts_backend(preload_tts)
-        print(f"TTS backend loaded!", file=sys.stderr)
+        logger.info("TTS backend loaded")
 
         # Warmup with a short synthesis
         if do_warmup:
-            print("Warming up TTS...", file=sys.stderr)
+            logger.info("Warming up TTS...")
             engine.synthesize("Hello.", voice="serena", language="English")
-            print("TTS warmup complete!", file=sys.stderr)
+            logger.info("TTS warmup complete")
 
     # Preload STT backend if specified
     if preload_stt:
-        print(f"Preloading STT backend: {preload_stt}...", file=sys.stderr)
+        logger.info("Preloading STT backend: %s...", preload_stt)
         engine.load_stt_backend(preload_stt)
-        print(f"STT backend loaded!", file=sys.stderr)
+        logger.info("STT backend loaded")
 
     yield
 

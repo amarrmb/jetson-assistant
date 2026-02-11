@@ -6,10 +6,12 @@ Supports multiple backends:
 - Porcupine (commercial, more accurate)
 """
 
-import sys
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -101,7 +103,7 @@ class OpenWakeWordDetector(WakeWordDetector):
             self._model_name = wake_word
             self.model = Model(wakeword_models=[wake_word])
 
-        print(f"Wake word detector ready: '{wake_word}'", file=sys.stderr)
+        logger.info("Wake word detector ready: '%s'", wake_word)
 
     def detect(self, audio: np.ndarray) -> bool:
         """Check if wake word is in audio chunk."""
@@ -185,7 +187,7 @@ class PorcupineDetector(WakeWordDetector):
         self.frame_length = self.porcupine.frame_length
         self._buffer = np.array([], dtype=np.int16)
 
-        print(f"Porcupine wake word detector ready: '{wake_word}'", file=sys.stderr)
+        logger.info("Porcupine wake word detector ready: '%s'", wake_word)
 
     def detect(self, audio: np.ndarray) -> bool:
         """Check if wake word is in audio chunk."""
@@ -234,7 +236,7 @@ class SimpleEnergyDetector(WakeWordDetector):
         self.threshold = threshold
         self.min_frames = min_frames
         self._above_count = 0
-        print("Using simple energy detector (no wake word)", file=sys.stderr)
+        logger.info("Using simple energy detector (no wake word)")
 
     def detect(self, audio: np.ndarray) -> bool:
         """Check if speech energy is above threshold."""

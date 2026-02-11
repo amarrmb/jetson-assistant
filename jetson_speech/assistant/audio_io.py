@@ -8,13 +8,15 @@ Provides:
 - Audio chimes/feedback sounds
 """
 
-import sys
+import logging
 import threading
 import queue
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -67,9 +69,9 @@ class VoiceActivityDetector:
                 pass
 
         if self._webrtc_vad:
-            print("Using WebRTC VAD", file=sys.stderr)
+            logger.info("Using WebRTC VAD")
         else:
-            print("Using energy-based VAD", file=sys.stderr)
+            logger.info("Using energy-based VAD")
 
         # Energy-based fallback parameters
         self.energy_threshold = 500.0
@@ -209,7 +211,7 @@ class AudioInput:
         else:
             device_info = sd.query_devices(device)
 
-        print(f"Audio input: {device_info['name']}", file=sys.stderr)
+        logger.info("Audio input: %s", device_info['name'])
 
     def start(self, callback: Callable[[np.ndarray], None]) -> None:
         """
@@ -241,7 +243,7 @@ class AudioInput:
     def _audio_callback(self, indata, frames, time_info, status):
         """Internal callback from sounddevice."""
         if status:
-            print(f"Audio input status: {status}", file=sys.stderr)
+            logger.warning("Audio input status: %s", status)
 
         if self._callback and self._running:
             # Convert to 1D array
@@ -297,7 +299,7 @@ class AudioOutput:
         if use_aplay:
             import shutil
             if shutil.which("aplay") is None:
-                print("aplay not found, falling back to sounddevice", file=sys.stderr)
+                logger.warning("aplay not found, falling back to sounddevice")
                 self._use_aplay = False
 
         if not self._use_aplay:
@@ -310,14 +312,14 @@ class AudioOutput:
                     device_info = sd.query_devices(kind="output")
                 else:
                     device_info = sd.query_devices(device)
-                print(f"Audio output: {device_info['name']}", file=sys.stderr)
+                logger.info("Audio output: %s", device_info['name'])
             except ImportError as e:
                 raise ImportError(
                     "sounddevice not installed. "
                     "Install with: pip install sounddevice"
                 ) from e
         else:
-            print("Audio output: aplay (ALSA)", file=sys.stderr)
+            logger.info("Audio output: aplay (ALSA)")
 
     def _resample(self, audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
         """Resample audio to target sample rate using scipy."""
@@ -408,8 +410,7 @@ class AudioOutput:
                 # Add timeout to prevent hanging
                 subprocess.run(["aplay", "-q", f.name], check=True, timeout=60)
             except subprocess.TimeoutExpired:
-                import sys
-                print("Audio playback timeout", file=sys.stderr)
+                logger.warning("Audio playback timeout")
             finally:
                 os.unlink(f.name)
 

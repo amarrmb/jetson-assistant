@@ -5,9 +5,11 @@ Replaces hand-written JSON tool definitions and if/elif dispatchers.
 """
 
 import inspect
+import logging
 import re
-import sys
 from typing import Annotated, Callable, Optional, get_args, get_origin
+
+logger = logging.getLogger(__name__)
 
 
 # Python type → JSON Schema type
@@ -142,10 +144,10 @@ class ToolRegistry:
 
         try:
             result = fn(**args)
-            print(f"  [Tool: {tool_call.name}({args})]", file=sys.stderr)
+            logger.debug("Tool: %s(%s)", tool_call.name, args)
             return str(result) if result is not None else None
         except Exception as e:
-            print(f"  [Tool error: {tool_call.name}: {e}]", file=sys.stderr)
+            logger.error("Tool error: %s: %s", tool_call.name, e)
             return None
 
     def __bool__(self) -> bool:

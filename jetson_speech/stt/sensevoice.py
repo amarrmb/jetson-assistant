@@ -4,8 +4,10 @@ SenseVoice STT backend implementation.
 Alibaba's SenseVoice for multilingual speech recognition.
 """
 
-import sys
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -53,7 +55,7 @@ class SenseVoiceBackend(STTBackend):
         else:
             self._model_name = "iic/SenseVoiceSmall"
 
-        print(f"Loading SenseVoice ({model_size})...", file=sys.stderr)
+        logger.info("Loading SenseVoice (%s)...", model_size)
 
         self._model = AutoModel(
             model=self._model_name,
@@ -62,7 +64,7 @@ class SenseVoiceBackend(STTBackend):
         )
 
         self._loaded = True
-        print("SenseVoice model loaded!", file=sys.stderr)
+        logger.info("SenseVoice model loaded")
 
     def transcribe(
         self,

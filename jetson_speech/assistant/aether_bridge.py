@@ -5,9 +5,8 @@ Graceful degradation: if aether-sdk-python is not installed or Hub is unavailabl
 AetherBridge is None and everything still works — just no alerts pushed to Hub.
 """
 
-import sys
-import time
 import logging
+import time
 from typing import Callable, Optional
 
 logger = logging.getLogger("AetherBridge")
@@ -39,10 +38,9 @@ class AetherBridge:
         try:
             from aether_sdk.client import AetherClient
         except ImportError:
-            print(
+            logger.warning(
                 "AetherBridge: aether-sdk not installed. "
-                "Alerts will not be pushed to Hub.",
-                file=sys.stderr,
+                "Alerts will not be pushed to Hub."
             )
             return None
 
@@ -63,21 +61,15 @@ class AetherBridge:
                 time.sleep(0.2)
 
             if client.is_authenticated:
-                print(
-                    f"AetherBridge: connected to Hub at {hub_host}:{hub_port}",
-                    file=sys.stderr,
-                )
+                logger.info("AetherBridge: connected to Hub at %s:%d", hub_host, hub_port)
                 return AetherBridge(client, hub_host, hub_port)
 
-            print(
-                f"AetherBridge: failed to authenticate with Hub at {hub_host}:{hub_port}",
-                file=sys.stderr,
-            )
+            logger.warning("AetherBridge: failed to authenticate with Hub at %s:%d", hub_host, hub_port)
             client.disconnect()
             return None
 
         except Exception as e:
-            print(f"AetherBridge: connection error: {e}", file=sys.stderr)
+            logger.error("AetherBridge: connection error: %s", e)
             return None
 
     @property
@@ -128,4 +120,4 @@ class AetherBridge:
         """Disconnect from Hub."""
         if self._client:
             self._client.disconnect()
-            print("AetherBridge: disconnected", file=sys.stderr)
+            logger.info("AetherBridge: disconnected")

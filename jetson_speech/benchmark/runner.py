@@ -2,8 +2,10 @@
 Benchmark runner for TTS and STT backends.
 """
 
-import sys
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from jetson_speech.benchmark.metrics import (
     BenchmarkMetrics,
@@ -66,7 +68,7 @@ def _benchmark_tts(
     results = []
 
     for backend_name in backends:
-        print(f"Benchmarking TTS: {backend_name}...", file=sys.stderr)
+        logger.info("Benchmarking TTS: %s...", backend_name)
 
         metrics = BenchmarkMetrics(
             backend=backend_name,
@@ -100,7 +102,7 @@ def _benchmark_tts(
                 metrics.audio_durations.append(result.duration)
                 metrics.chars_processed.append(len(text))
 
-                print(f"  [{i + 1}/{iterations}] {collector.elapsed:.3f}s", file=sys.stderr)
+                logger.info("  [%d/%d] %.3fs", i + 1, iterations, collector.elapsed)
 
             # Record memory after
             metrics.memory_after_mb = get_memory_usage()
@@ -116,7 +118,7 @@ def _benchmark_tts(
             }
 
         except Exception as e:
-            print(f"  Error: {e}", file=sys.stderr)
+            logger.error("  Error: %s", e)
             metrics.metadata["error"] = str(e)
 
         results.append(metrics)
@@ -146,7 +148,7 @@ def _benchmark_stt(
     results = []
 
     for backend_name in backends:
-        print(f"Benchmarking STT: {backend_name}...", file=sys.stderr)
+        logger.info("Benchmarking STT: %s...", backend_name)
 
         metrics = BenchmarkMetrics(
             backend=backend_name,
@@ -179,7 +181,7 @@ def _benchmark_stt(
                 metrics.ttfb.append(collector.ttfb)
                 metrics.audio_lengths.append(audio_duration)
 
-                print(f"  [{i + 1}/{iterations}] {collector.elapsed:.3f}s", file=sys.stderr)
+                logger.info("  [%d/%d] %.3fs", i + 1, iterations, collector.elapsed)
 
             # Record memory after
             metrics.memory_after_mb = get_memory_usage()
@@ -196,7 +198,7 @@ def _benchmark_stt(
             }
 
         except Exception as e:
-            print(f"  Error: {e}", file=sys.stderr)
+            logger.error("  Error: %s", e)
             metrics.metadata["error"] = str(e)
 
         results.append(metrics)

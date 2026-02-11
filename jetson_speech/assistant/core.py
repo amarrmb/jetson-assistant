@@ -9,14 +9,16 @@ This is the heart of the assistant that ties together:
 """
 
 import base64
+import logging
 import re
-import sys
 import time
 import threading
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass, field, fields
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Callable, Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -307,6 +309,10 @@ class VoiceAssistant:
         # Language instruction appended to system prompt (set by set_language tool)
         self._language_instruction = ""
 
+    def _set_language_instruction(self, instruction: str) -> None:
+        """Set the language instruction (called by set_language builtin tool)."""
+        self._language_instruction = instruction
+
         # External tool plugin modules (loaded in _init_tools)
         self._external_tool_modules: list = []
 
@@ -334,7 +340,7 @@ class VoiceAssistant:
         # Audio-reactive motion: background thread feeding chunks during playback
         self._audio_feed_thread: Optional[threading.Thread] = None
 
-        print("Voice assistant initialized!", file=sys.stderr)
+        logger.info("Voice assistant initialized")
 
     def _set_state(self, new_state: AssistantState) -> None:
         """Set assistant state and notify external tool plugins."""
@@ -400,7 +406,7 @@ class VoiceAssistant:
         )
         self.engine = RemoteEngine(remote_config)
 
-        print(f"Connecting to server at {remote_config.base_url}...", file=sys.stderr)
+        logger.info("Connecting to server at %s...", remote_config.base_url)
         if not self.engine.wait_for_server(timeout=10.0):
             raise ConnectionError(
                 f"Could not connect to jetson-speech server at {remote_config.base_url}. "
@@ -423,7 +429,7 @@ class VoiceAssistant:
         # If using server LLM, skip local initialization
         if self.config.use_server and self.config.use_server_llm:
             self.llm = None  # Will use self.engine.chat() instead
-            print("Using server LLM (no local LLM loaded)", file=sys.stderr)
+            logger.info("Using server LLM (no local LLM loaded)")
             return
 
         # Use vision system prompt if vision enabled and no custom prompt.
@@ -499,15 +505,14 @@ class VoiceAssistant:
             if camera.open():
                 self.camera = camera
             else:
-                print("Vision: Camera failed to open, falling back to text-only", file=sys.stderr)
+                logger.warning("Vision: Camera failed to open, falling back to text-only")
         except ImportError:
-            print(
+            logger.error(
                 "Vision: opencv-python-headless not installed. "
-                "Install with: pip install opencv-python-headless",
-                file=sys.stderr,
+                "Install with: pip install opencv-python-headless"
             )
         except Exception as e:
-            print(f"Vision: Camera init error: {e}", file=sys.stderr)
+            logger.error("Vision: Camera init error: %s", e)
 
     def _init_vision_monitor(self) -> None:
         """Initialize vision monitor for 'watch for X' commands."""
@@ -529,7 +534,7 @@ class VoiceAssistant:
             confidence_threshold=self.config.watch_confidence_threshold,
             vote_window=self.config.watch_vote_window,
         )
-        print("VisionMonitor: available (use 'watch for...' or 'tell me when you see...')", file=sys.stderr)
+        logger.info("VisionMonitor: available (use 'watch for...' or 'tell me when you see...')")
 
     def _init_camera_pool(self) -> None:
         """Initialize multi-camera pool from config file."""
@@ -551,21 +556,21 @@ class VoiceAssistant:
                     remote_cam = RemoteCamera(port=self.config.remote_camera_port)
                     if remote_cam.open():
                         self._camera_pool.add_remote(remote_cam)
-                        print(f"RemoteCamera: listening on UDP port {self.config.remote_camera_port}", file=sys.stderr)
+                        logger.info("RemoteCamera: listening on UDP port %d", self.config.remote_camera_port)
                     else:
-                        print("RemoteCamera: failed to open", file=sys.stderr)
+                        logger.warning("RemoteCamera: failed to open")
                 except Exception as e:
-                    print(f"RemoteCamera: init error: {e}", file=sys.stderr)
+                    logger.error("RemoteCamera: init error: %s", e)
 
             count = len(self._camera_pool)
             if count > 0:
                 names = ", ".join(s.name for s in self._camera_pool.list_cameras())
-                print(f"CameraPool: loaded {count} cameras ({names})", file=sys.stderr)
+                logger.info("CameraPool: loaded %d cameras (%s)", count, names)
             else:
-                print("CameraPool: no cameras configured", file=sys.stderr)
+                logger.info("CameraPool: no cameras configured")
 
         except Exception as e:
-            print(f"CameraPool: init error: {e}", file=sys.stderr)
+            logger.error("CameraPool: init error: %s", e)
             self._camera_pool = None
 
     def _init_multi_watch(self) -> None:
@@ -588,9 +593,9 @@ class VoiceAssistant:
                 vote_window=self.config.watch_vote_window,
                 cooldown_s=self.config.watch_cooldown,
             )
-            print("MultiWatch: available (use 'watch <camera> for...')", file=sys.stderr)
+            logger.info("MultiWatch: available (use 'watch <camera> for...')")
         except Exception as e:
-            print(f"MultiWatch: init error: {e}", file=sys.stderr)
+            logger.error("MultiWatch: init error: %s", e)
 
     def _init_aether(self) -> None:
         """Connect to Aether Hub if configured."""
@@ -609,7 +614,7 @@ class VoiceAssistant:
                 self._aether_bridge.on_command(self._on_aether_command)
                 self._start_status_publisher()
         except Exception as e:
-            print(f"AetherBridge: init error: {e}", file=sys.stderr)
+            logger.error("AetherBridge: init error: %s", e)
 
     def _init_vision_preview(self) -> None:
         """Initialize vision preview if show_vision or stream_vision_port is set."""
@@ -712,516 +717,48 @@ class VoiceAssistant:
             prompt += "\n\n" + self._language_instruction
 
         self.llm.set_system_prompt(prompt)
-        print(f"Tool system prompt set ({len(self._tools)} tools registered)", file=sys.stderr)
+        logger.info("Tool system prompt set (%d tools registered)", len(self._tools))
 
     def _init_tools(self) -> None:
         """Register LLM-callable tools via ToolRegistry."""
         from jetson_speech.assistant.tools import ToolRegistry
+        from jetson_speech.assistant.builtin_tools import register_builtin_tools
 
         self._tools = ToolRegistry()
 
-        # ── Always-available tools ──
+        # Build context dict with everything builtin tools need
+        context = {
+            "say": self.say,
+            "engine": self.engine,
+            "config": self.config,
+            "llm": self.llm,
+            "camera": self.camera,
+            "camera_lock": self._camera_lock,
+            "camera_pool": self._camera_pool,
+            "vision_monitor": self._vision_monitor,
+            "multi_watch": self._multi_watch,
+            "update_preview": self._update_preview,
+            "set_language_instruction": self._set_language_instruction,
+            "apply_tool_system_prompt": self._apply_tool_system_prompt,
+            "knowledge_collection": self.config.knowledge_collection,
+        }
 
-        @self._tools.register(
-            "Get the current date and time. Use when the user asks what time it is, "
-            "what today's date is, or anything about the current time."
-        )
-        def get_time() -> str:
-            from datetime import datetime
-
-            now = datetime.now()
-            return now.strftime("It's %I:%M %p on %A, %B %d, %Y.").replace(" 0", " ")
-
-        @self._tools.register(
-            "Get system stats like uptime, memory usage, and CPU temperature. "
-            "Use when the user asks about system health, how the Jetson is doing, "
-            "or wants hardware status."
-        )
-        def system_stats() -> str:
-            import os
-
-            parts = []
-            # Uptime
-            try:
-                with open("/proc/uptime") as f:
-                    secs = float(f.read().split()[0])
-                hours = int(secs // 3600)
-                mins = int((secs % 3600) // 60)
-                parts.append(f"Uptime {hours} hours {mins} minutes")
-            except OSError:
-                pass
-            # Memory
-            try:
-                with open("/proc/meminfo") as f:
-                    meminfo = {}
-                    for line in f:
-                        k, v = line.split(":")
-                        meminfo[k.strip()] = int(v.strip().split()[0])
-                total_mb = meminfo["MemTotal"] // 1024
-                avail_mb = meminfo.get("MemAvailable", meminfo.get("MemFree", 0)) // 1024
-                used_mb = total_mb - avail_mb
-                pct = int(used_mb / total_mb * 100) if total_mb else 0
-                parts.append(f"Memory: {used_mb}MB of {total_mb}MB used, {pct}%")
-            except (OSError, KeyError, ValueError):
-                pass
-            # CPU temperature
-            try:
-                thermal_dir = "/sys/devices/virtual/thermal"
-                for entry in os.listdir(thermal_dir):
-                    if entry.startswith("thermal_zone"):
-                        temp_path = os.path.join(thermal_dir, entry, "temp")
-                        with open(temp_path) as f:
-                            temp_c = int(f.read().strip()) / 1000
-                        parts.append(f"CPU temperature {temp_c:.0f}°C")
-                        break
-            except (OSError, ValueError):
-                pass
-            return ". ".join(parts) + "." if parts else "Could not read system stats."
-
-        @self._tools.register(
-            "Set a countdown timer. Use when the user asks to set a timer, "
-            "reminder, or countdown for a number of seconds."
-        )
-        def set_timer(
-            seconds: Annotated[int, "Number of seconds for the timer"],
-        ) -> str:
-            def _timer_done():
-                self.say(f"Time's up! Your {seconds} second timer is done.")
-
-            t = threading.Timer(seconds, _timer_done)
-            t.daemon = True
-            t.start()
-            return f"Timer set for {seconds} seconds."
-
-        @self._tools.register(
-            "Remember a piece of information for the user. Use when the user asks "
-            "you to remember, save, or note something."
-        )
-        def remember(
-            info: Annotated[str, "The information to remember"],
-        ) -> str:
-            import json
-            from pathlib import Path
-
-            mem_path = Path.home() / ".assistant_memory.json"
-            memories: list[str] = []
-            if mem_path.exists():
-                try:
-                    memories = json.loads(mem_path.read_text())
-                except (json.JSONDecodeError, OSError):
-                    pass
-            memories.append(info)
-            mem_path.write_text(json.dumps(memories, indent=2))
-            return "I'll remember that."
-
-        @self._tools.register(
-            "Recall previously remembered information. Use when the user asks what "
-            "you remember, or asks about something they previously told you to remember."
-        )
-        def recall(
-            query: Annotated[str, (
-                "What to search for. Use 'all' to get everything, "
-                "or a keyword to search memories."
-            )] = "all",
-        ) -> str:
-            import json
-            from pathlib import Path
-
-            mem_path = Path.home() / ".assistant_memory.json"
-            if not mem_path.exists():
-                return "I don't have any memories saved yet."
-            try:
-                memories: list[str] = json.loads(mem_path.read_text())
-            except (json.JSONDecodeError, OSError):
-                return "I don't have any memories saved yet."
-            if not memories:
-                return "I don't have any memories saved yet."
-
-            if query.lower() in ("all", "everything", ""):
-                numbered = [f"{i+1}. {m}" for i, m in enumerate(memories)]
-                return "Here's what I remember: " + " ".join(numbered)
-
-            matches = [m for m in memories if query.lower() in m.lower()]
-            if not matches:
-                return f"I don't remember anything about '{query}'."
-            numbered = [f"{i+1}. {m}" for i, m in enumerate(matches)]
-            return "Here's what I found: " + " ".join(numbered)
-
-        @self._tools.register(
-            "Switch the assistant's spoken language. Use when the user asks you to "
-            "speak in a different language, respond in Hindi, switch to English, "
-            "talk in Japanese, etc. Supported: english, hindi, japanese, chinese, "
-            "korean, french, spanish, portuguese."
-        )
-        def set_language(
-            language: Annotated[str, (
-                "Language to switch to: 'english', 'hindi', 'japanese', 'chinese', "
-                "'korean', 'french', 'spanish', 'portuguese'"
-            )],
-        ) -> str:
-            lang_map = {
-                "english": "en", "hindi": "hi", "japanese": "ja",
-                "chinese": "zh", "korean": "ko", "french": "fr",
-                "spanish": "es", "portuguese": "pt", "british": "en-gb",
-                # Also accept codes directly
-                "en": "en", "hi": "hi", "ja": "ja", "zh": "zh",
-                "ko": "ko", "fr": "fr", "es": "es", "pt": "pt",
-            }
-
-            # Language instructions for the LLM (tells it to generate text in target language)
-            lang_instructions = {
-                "en": "",  # English = default, no extra instruction
-                "en-gb": "",
-                "hi": "IMPORTANT: You MUST respond in Hindi using Devanagari script (हिंदी). All your responses must be in Hindi, not English. Tool calls remain in JSON.",
-                "ja": "IMPORTANT: You MUST respond in Japanese (日本語). All your responses must be in Japanese. Tool calls remain in JSON.",
-                "zh": "IMPORTANT: You MUST respond in Chinese (中文). All your responses must be in Chinese. Tool calls remain in JSON.",
-                "ko": "IMPORTANT: You MUST respond in Korean (한국어). All your responses must be in Korean. Tool calls remain in JSON.",
-                "fr": "IMPORTANT: You MUST respond in French (français). All your responses must be in French. Tool calls remain in JSON.",
-                "es": "IMPORTANT: You MUST respond in Spanish (español). All your responses must be in Spanish. Tool calls remain in JSON.",
-                "pt": "IMPORTANT: You MUST respond in Portuguese (português). All your responses must be in Portuguese. Tool calls remain in JSON.",
-            }
-
-            # Native-language confirmations (spoken by TTS in the target language)
-            lang_confirmations = {
-                "en": "Switched to English.",
-                "en-gb": "Switched to British English.",
-                "hi": "ठीक है, अब मैं हिंदी में बोलूँगी।",
-                "ja": "はい、日本語で話します。",
-                "zh": "好的，我现在说中文。",
-                "ko": "네, 이제 한국어로 말할게요.",
-                "fr": "D'accord, je parle maintenant en français.",
-                "es": "De acuerdo, ahora hablo en español.",
-                "pt": "Ok, agora vou falar em português.",
-            }
-
-            lang_code = lang_map.get(language.lower().strip())
-            if lang_code is None:
-                return f"Language '{language}' not supported. Try: english, hindi, japanese, chinese, korean, french, spanish, portuguese."
-
-            backend = self.engine._tts_backend
-            if backend is None or not hasattr(backend, "switch_language"):
-                return "Language switching requires Kokoro TTS backend."
-
-            try:
-                backend.switch_language(lang_code)
-                # Update config so subsequent synthesize calls use the new voice
-                self.config.tts_voice = backend._current_voice
-                self.config.tts_language = lang_code
-
-                # Update LLM system prompt to generate text in the target language
-                self._language_instruction = lang_instructions.get(lang_code, "")
-                self._apply_tool_system_prompt()
-
-                return lang_confirmations.get(lang_code, f"Switched to {language}.")
-            except Exception as e:
-                return f"Failed to switch language: {e}"
-
-        @self._tools.register(
-            "Search the web for current information. MANDATORY for any question about "
-            "news, latest, updates, recent events, what happened, or any company/person "
-            "updates. Your training data is outdated — NEVER answer news questions from "
-            "memory. ALWAYS use this tool for: latest, news, update, recent, current."
-        )
-        def web_search(
-            query: Annotated[str, "The search query"],
-        ) -> str:
-            # Try new 'ddgs' package first, then legacy 'duckduckgo_search'
-            DDGS = None
-            try:
-                from ddgs import DDGS
-            except ImportError:
-                try:
-                    from duckduckgo_search import DDGS
-                except ImportError:
-                    return (
-                        "Web search is not available. "
-                        "Install with: pip install ddgs"
-                    )
-
-            try:
-                from datetime import datetime
-                # Add current date context for recency
-                date_str = datetime.now().strftime("%B %Y")
-
-                # Try news search first (better for "latest news" queries)
-                ddgs = DDGS()
-                results = list(ddgs.news(query, max_results=3))
-
-                # Fallback to text search if news returns nothing
-                if not results:
-                    results = list(ddgs.text(f"{query} {date_str}", max_results=3))
-
-                if not results:
-                    return f"No results found for '{query}'."
-
-                summaries = []
-                for r in results:
-                    title = r.get("title", "")
-                    body = r.get("body", r.get("description", ""))
-                    date = r.get("date", "")
-                    entry = f"{title}: {body}"
-                    if date:
-                        entry = f"[{date[:10]}] {entry}"
-                    summaries.append(entry)
-                combined = " | ".join(summaries)
-                if len(combined) > 600:
-                    combined = combined[:597] + "..."
-                return combined
-            except Exception as e:
-                return f"Search failed: {e}"
-
-        # ── Camera tools (need self.camera) ──
-
-        if self.camera is not None:
-            camera = self.camera
-
-            @self._tools.register(
-                "Take a photo with the camera and save it. Use when the user asks "
-                "to take a picture, photo, snapshot, or capture an image."
-            )
-            def take_photo() -> str:
-                import os
-                from datetime import datetime
-
-                try:
-                    import cv2
-                except ImportError:
-                    return "Camera not available — opencv not installed."
-
-                photos_dir = os.path.expanduser("~/photos")
-                os.makedirs(photos_dir, exist_ok=True)
-
-                with self._camera_lock:
-                    frame = camera.capture_frame()
-                if frame is None:
-                    return "Failed to capture a photo."
-
-                filename = f"photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-                filepath = os.path.join(photos_dir, filename)
-                cv2.imwrite(filepath, frame)
-                return f"Photo saved as {filename}"
-
-        # ── Vision monitor tools (need self._vision_monitor, single-camera legacy) ──
-
-        if self._vision_monitor is not None and self._multi_watch is None:
-            vm = self._vision_monitor
-
-            @self._tools.register(
-                "Start continuously monitoring the camera and alert the user when a "
-                "condition is detected. Use this when the user asks you to watch for "
-                "something, keep an eye on something, monitor something, or alert/notify "
-                "them about a visual event."
-            )
-            def start_watching(
-                condition: Annotated[str, (
-                    "A yes/no question to periodically check against the camera "
-                    "feed. Example: 'Is someone taking the candies?'"
-                )],
-            ) -> None:
-                from jetson_speech.assistant.vision import WatchCondition
-
-                wc = WatchCondition(
-                    description=condition,
-                    prompt=f"{condition} Answer only YES or NO.",
-                    announce_template="Alert: the condition you asked about has been detected!",
-                )
-                vm.start_watching(wc)
-                self._update_preview(state="IDLE", watch_text=f"monitoring: {condition[:40]}")
-
-            @self._tools.register(
-                "Stop the current camera monitoring. Use when the user asks to stop "
-                "watching, cancel monitoring, or no longer needs alerts."
-            )
-            def stop_watching() -> None:
-                if vm.is_watching:
-                    vm.stop_watching()
-                    self._update_preview(state="IDLE", watch_text="")
-
-        # ── Multi-camera tools (camera pool + multi-watch) ──
-
-        if self._camera_pool is not None:
-            pool = self._camera_pool
-
-            @self._tools.register(
-                "List all available cameras and their locations. Use when the user "
-                "asks what cameras they have, which cameras are connected, or wants "
-                "to see available camera names."
-            )
-            def list_cameras() -> str:
-                cameras = pool.list_cameras()
-                if not cameras:
-                    return "No cameras configured."
-                parts = []
-                for cam in cameras:
-                    loc = f" ({cam.location})" if cam.location else ""
-                    parts.append(f"{cam.name}{loc}")
-                return f"You have {len(cameras)} cameras: {', '.join(parts)}."
-
-            @self._tools.register(
-                "Check a specific camera by name and describe what you see. Use when "
-                "the user asks what's happening at a specific camera, wants to see a "
-                "camera feed, or asks about a specific location's camera. "
-                "Example: 'What's happening at the front door?'"
-            )
-            def check_camera(
-                camera_name: Annotated[str, "Name of the camera to check (e.g., 'garage', 'front_door')"],
-                question: Annotated[str, "What to look for or describe (e.g., 'Is anyone there?', 'Describe what you see')"] = "Describe what you see in this image. Be specific and concise.",
-            ) -> str:
-                if not pool.has(camera_name):
-                    available = ", ".join(s.name for s in pool.list_cameras())
-                    return f"Camera '{camera_name}' not found. Available: {available}."
-
-                frame_b64 = pool.capture_base64(camera_name)
-                if frame_b64 is None:
-                    return f"Failed to capture frame from '{camera_name}'. Camera may be offline."
-
-                # Use VLM to analyze the frame
-                if self.llm is None:
-                    return "No LLM available for image analysis."
-
-                try:
-                    response = self.llm.generate(
-                        question,
-                        images=[frame_b64],
-                    )
-                    return response.text.strip()
-                except Exception as e:
-                    return f"Vision analysis failed: {e}"
-
-            @self._tools.register(
-                "Add a new camera by name and URL. Use when the user wants to register "
-                "a new camera. URL can be RTSP (rtsp://...) or USB (usb:0)."
-            )
-            def add_camera(
-                name: Annotated[str, "Name for the camera (e.g., 'patio', 'nursery')"],
-                url: Annotated[str, "Camera URL: RTSP (rtsp://ip:port/path) or USB (usb:0)"],
-            ) -> str:
-                return pool.add(name, url)
-
-            @self._tools.register(
-                "Remove a camera by name. Use when the user wants to delete or "
-                "unregister a camera."
-            )
-            def remove_camera(
-                name: Annotated[str, "Name of the camera to remove"],
-            ) -> str:
-                return pool.remove(name)
-
-        if self._multi_watch is not None:
-            mw = self._multi_watch
-
-            @self._tools.register(
-                "Start watching a specific camera and alert when a condition is detected. "
-                "Use when the user asks to watch a camera for something, monitor a location, "
-                "or get alerts from a specific camera. Each camera can have one active watch. "
-                "Example: 'Watch the garage and tell me when the door opens'"
-            )
-            def watch_camera(
-                camera_name: Annotated[str, "Name of the camera to watch (e.g., 'garage')"],
-                condition: Annotated[str, (
-                    "A yes/no question to periodically check. "
-                    "Example: 'Is the garage door open?'"
-                )],
-            ) -> str:
-                from jetson_speech.assistant.vision import WatchCondition
-
-                wc = WatchCondition(
-                    description=condition,
-                    prompt=f"{condition} Answer only YES or NO.",
-                    announce_template=f"Alert on {camera_name}: {condition}",
-                )
-                result = mw.start_watching(camera_name, wc)
-                self._update_preview(
-                    state="IDLE",
-                    watch_text=f"watching {camera_name}: {condition[:30]}",
-                )
-                return result
-
-            @self._tools.register(
-                "Stop watching a camera or all cameras. Use when the user asks to "
-                "stop monitoring, cancel a watch, or stop all alerts. "
-                "Use camera_name='all' to stop everything."
-            )
-            def stop_watching_camera(
-                camera_name: Annotated[str, (
-                    "Camera to stop watching, or 'all' to stop all watches"
-                )] = "all",
-            ) -> str:
-                result = mw.stop_watching(camera_name)
-                self._update_preview(state="IDLE", watch_text="")
-                return result
-
-            @self._tools.register(
-                "List all active camera watches. Use when the user asks what you're "
-                "currently watching or monitoring."
-            )
-            def list_watches() -> str:
-                watches = mw.list_watches()
-                if not watches:
-                    return "No active watches."
-                parts = []
-                for w in watches:
-                    status = "active" if w["active"] else "stopped"
-                    parts.append(f"{w['camera']}: {w['condition']} ({status})")
-                return f"Active watches: {'; '.join(parts)}"
-
-        # ── Knowledge base tool (RAG-based personal info lookup) ──
-
-        if self.config.knowledge_collection:
-            collection_name = self.config.knowledge_collection
-
-            @self._tools.register(
-                "Look up personal or specific information from the knowledge base. "
-                "Use this when the user asks about personal details, contacts, family info, "
-                "birthdays, phone numbers, preferences, schedules, or any factual info that "
-                "would have been stored in advance. Also use this for any domain-specific "
-                "knowledge that has been loaded into the knowledge base."
-            )
-            def lookup_info(
-                query: Annotated[str, "What to look up (e.g., 'mom birthday', 'dentist phone number', 'wifi password')"],
-            ) -> str:
-                try:
-                    from jetson_speech.rag.pipeline import RAGPipeline
-                except ImportError:
-                    return (
-                        "Knowledge base not available. "
-                        "Install with: pip install chromadb sentence-transformers"
-                    )
-
-                try:
-                    rag = RAGPipeline(collection_name)
-                    results = rag.retrieve(query, top_k=3)
-
-                    if not results:
-                        return f"No information found for '{query}'."
-
-                    # Filter low-confidence results
-                    good_results = [r for r in results if r.get("score", 0) > 0.3]
-                    if not good_results:
-                        return f"No relevant information found for '{query}'."
-
-                    parts = []
-                    for r in good_results:
-                        parts.append(r["content"])
-                    return " | ".join(parts)
-
-                except Exception as e:
-                    return f"Knowledge base lookup failed: {e}"
+        register_builtin_tools(self._tools, context)
 
         # ── External tool plugins ──
 
         if self.config.external_tools:
             import importlib
 
-            context = {"llm": self.llm, "camera_pool": self._camera_pool, "say": self.say}
+            ext_context = {"llm": self.llm, "camera_pool": self._camera_pool, "say": self.say}
             for module_path in self.config.external_tools:
                 try:
                     mod = importlib.import_module(module_path)
-                    mod.register_tools(self._tools, context)
+                    mod.register_tools(self._tools, ext_context)
                     self._external_tool_modules.append(mod)
-                    print(f"Loaded external tools from {module_path}", file=sys.stderr)
+                    logger.info("Loaded external tools from %s", module_path)
                 except Exception as e:
-                    print(f"Failed to load external tools from {module_path}: {e}", file=sys.stderr)
+                    logger.error("Failed to load external tools from %s: %s", module_path, e)
 
     def _handle_watch_command(self, user_text: str) -> Optional[str]:
         """
@@ -1275,7 +812,7 @@ class VoiceAssistant:
         if not self._tools:
             return None
 
-        print(f"  [Fast-path: news query detected]", file=sys.stderr)
+        logger.debug("Fast-path: news query detected")
 
         # Quick acknowledgment so the user feels heard
         self._set_state(AssistantState.SPEAKING)
@@ -1292,7 +829,7 @@ class VoiceAssistant:
         if not raw_result or raw_result.startswith("No results") or raw_result.startswith("Search failed"):
             return None  # Fall through to normal LLM path
 
-        print(f"  [Tool: web_search('{query}')]", file=sys.stderr)
+        logger.debug("Tool: web_search('%s')", query)
 
         # Summarize with LLM for natural speech
         if self.llm is not None and len(raw_result) > 120:
@@ -1372,7 +909,7 @@ class VoiceAssistant:
         from jetson_speech.assistant.llm import ToolCallResult
         results = []
         for tool_name, args in tool_calls:
-            print(f"  [Tool: {tool_name}({args})]", file=sys.stderr)
+            logger.debug("Tool: %s(%s)", tool_name, args)
             tc = ToolCallResult(name=tool_name, arguments=args)
             result = self._tools.execute(tc)
             if result is not None:
@@ -1384,7 +921,7 @@ class VoiceAssistant:
 
     def _on_watch_detected(self, condition, frame_b64: str) -> None:
         """Callback when the vision monitor detects the watched condition."""
-        print(f"VisionMonitor: detected '{condition.description}'!", file=sys.stderr)
+        logger.info("VisionMonitor: detected '%s'", condition.description)
         self._update_preview(state="SPEAKING", watch_text=f"detected {condition.description}!")
         self.say(condition.announce_template)
 
@@ -1398,7 +935,7 @@ class VoiceAssistant:
     ) -> None:
         """Callback when the multi-watch monitor detects a condition on a camera."""
         msg = f"Alert: {condition.description} detected on {camera_name}!"
-        print(f"MultiWatch: {msg}", file=sys.stderr)
+        logger.info("MultiWatch: %s", msg)
         self._update_preview(state="SPEAKING", watch_text=f"{camera_name}: detected!")
         self.say(msg)
 
@@ -1410,7 +947,7 @@ class VoiceAssistant:
             try:
                 self._aether_bridge.publish_alert(camera_name, condition.description)
             except Exception as e:
-                print(f"AetherBridge: alert publish error: {e}", file=sys.stderr)
+                logger.error("AetherBridge: alert publish error: %s", e)
 
     # ── Aether command dispatcher (mobile/web → assistant) ──
 
@@ -1439,7 +976,7 @@ class VoiceAssistant:
         if not command:
             return
 
-        print(f"AetherBridge: command '{command}' from {from_id[:12]}...", file=sys.stderr)
+        logger.info("AetherBridge: command '%s' from %s...", command, from_id[:12])
 
         # Dispatch in background thread to avoid blocking message handler
         t = threading.Thread(
@@ -1462,7 +999,7 @@ class VoiceAssistant:
                 "result": result,
             }
         except Exception as e:
-            print(f"AetherBridge: command error: {e}", file=sys.stderr)
+            logger.error("AetherBridge: command error: %s", e)
             response = {
                 "type": "CMD_RESPONSE",
                 "id": cmd_id,
@@ -1474,7 +1011,7 @@ class VoiceAssistant:
             try:
                 self._aether_bridge.send_to(from_id, response)
             except Exception as e:
-                print(f"AetherBridge: response send error: {e}", file=sys.stderr)
+                logger.error("AetherBridge: response send error: %s", e)
 
     def _dispatch_command(self, command: str, args: dict) -> dict:
         """Route a command to the appropriate handler. Returns result dict."""
@@ -1735,7 +1272,7 @@ class VoiceAssistant:
                         watches=status["watches"],
                     )
                 except Exception as e:
-                    print(f"AetherBridge: status publish error: {e}", file=sys.stderr)
+                    logger.error("AetherBridge: status publish error: %s", e)
                 # Sleep in small increments so we can exit cleanly
                 for _ in range(30):
                     if self._aether_bridge is None:
@@ -1744,7 +1281,7 @@ class VoiceAssistant:
 
         t = threading.Thread(target=_publish_loop, daemon=True)
         t.start()
-        print("AetherBridge: status publisher started (30s interval)", file=sys.stderr)
+        logger.info("AetherBridge: status publisher started (30s interval)")
 
     def run(self) -> None:
         """
@@ -1757,7 +1294,7 @@ class VoiceAssistant:
         4. Plays response
         """
         self._running = True
-        print(f"\nAssistant ready! Say '{self.config.wake_word.replace('_', ' ')}' to start...\n", file=sys.stderr)
+        logger.info("Assistant ready! Say '%s' to start...", self.config.wake_word.replace('_', ' '))
 
         audio_input = AudioInput(config=self.audio_config, device=self.config.audio_input_device)
 
@@ -1768,7 +1305,7 @@ class VoiceAssistant:
                 time.sleep(0.1)
 
         except KeyboardInterrupt:
-            print("\nStopping assistant...", file=sys.stderr)
+            logger.info("Stopping assistant...")
         finally:
             if self._vision_preview is not None:
                 self._vision_preview.stop()
@@ -1788,7 +1325,7 @@ class VoiceAssistant:
                     try:
                         mod.cleanup()
                     except Exception as e:
-                        print(f"External tool cleanup error ({mod.__name__}): {e}", file=sys.stderr)
+                        logger.error("External tool cleanup error (%s): %s", mod.__name__, e)
             self._running = False
 
     def run_async(self) -> threading.Thread:
@@ -1854,7 +1391,7 @@ class VoiceAssistant:
     def _on_wake_detected(self) -> None:
         """Handle wake word detection."""
         if self.config.verbose:
-            print("Wake word detected!", file=sys.stderr)
+            logger.debug("Wake word detected!")
 
         self._set_state(AssistantState.LISTENING)
         self._audio_buffer = []
@@ -1881,7 +1418,7 @@ class VoiceAssistant:
         if self.config.on_listen_start:
             self.config.on_listen_start()
 
-        print("Listening...", file=sys.stderr)
+        logger.info("Listening...")
 
     def _on_listen_complete(self) -> None:
         """Handle end of user speech."""
@@ -1898,7 +1435,7 @@ class VoiceAssistant:
                 pass
 
         if self.config.verbose:
-            print("Processing...", file=sys.stderr)
+            logger.debug("Processing...")
 
         # Process in thread to not block audio
         threading.Thread(target=self._process_speech, daemon=True).start()
@@ -1956,7 +1493,7 @@ class VoiceAssistant:
             rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2)))
             if rms < 0.02:
                 if self.config.verbose:
-                    print(f"(rejected: audio too quiet, RMS={rms:.4f})", file=sys.stderr)
+                    logger.debug("(rejected: audio too quiet, RMS=%.4f)", rms)
                 self._set_state(AssistantState.IDLE)
                 return
 
@@ -1971,7 +1508,7 @@ class VoiceAssistant:
             stt_time = time.perf_counter() - start
 
             if not user_text:
-                print("(no speech detected)", file=sys.stderr)
+                logger.debug("(no speech detected)")
                 self._set_state(AssistantState.IDLE)
                 return
 
@@ -1979,22 +1516,22 @@ class VoiceAssistant:
 
             if word_count < self.config.stt_min_words:
                 if self.config.verbose:
-                    print(f"(rejected: too few words)", file=sys.stderr)
+                    logger.debug("(rejected: too few words)")
                 self._set_state(AssistantState.IDLE)
                 return
 
             # Filter known Whisper hallucinations
             if self._is_hallucination(user_text):
                 if self.config.verbose:
-                    print(f"(rejected: hallucination) \"{user_text}\"", file=sys.stderr)
+                    logger.debug("(rejected: hallucination) \"%s\"", user_text)
                 self._set_state(AssistantState.IDLE)
                 return
 
-            print(f"You: {user_text}", file=sys.stderr)
+            logger.info("You: %s", user_text)
             self._update_preview(state="PROCESSING", user_text=user_text)
 
             if self.config.verbose:
-                print(f"  [STT: {stt_time*1000:.0f}ms]", file=sys.stderr)
+                logger.debug("STT: %.0fms", stt_time * 1000)
 
             # Callback
             if self.config.on_listen_end:
@@ -2005,7 +1542,7 @@ class VoiceAssistant:
             if watch_response is not None:
                 self._set_state(AssistantState.SPEAKING)
                 self.say(watch_response)
-                print(f"Assistant: {watch_response}", file=sys.stderr)
+                logger.info("Assistant: %s", watch_response)
                 self._get_conversation("local").append({"role": "user", "content": user_text})
                 self._get_conversation("local").append({"role": "assistant", "content": watch_response})
                 self._set_state(AssistantState.IDLE)
@@ -2016,7 +1553,7 @@ class VoiceAssistant:
             if news_response is not None:
                 self._set_state(AssistantState.SPEAKING)
                 self._speak_sentences(news_response)
-                print(f"Assistant: {news_response}", file=sys.stderr)
+                logger.info("Assistant: %s", news_response)
                 self._get_conversation("local").append({"role": "user", "content": user_text})
                 self._get_conversation("local").append({"role": "assistant", "content": news_response})
                 self._set_state(AssistantState.IDLE)
@@ -2040,7 +1577,7 @@ class VoiceAssistant:
             intent = self._classify_intent(user_text)
             if self.config.verbose:
                 router_ms = (time.perf_counter() - time.perf_counter()) if intent == "CHAT" else 0
-                print(f"  [Router: {intent}]", file=sys.stderr)
+                logger.debug("Router: %s", intent)
 
             if intent == "CHAT" and self.camera is not None and self.camera.is_open:
                 # Chat with no tools — check if user wants vision (legacy path)
@@ -2050,7 +1587,7 @@ class VoiceAssistant:
                     if frame_b64:
                         images = [frame_b64]
                         if self.config.verbose:
-                            print("  [Vision: frame captured]", file=sys.stderr)
+                            logger.debug("Vision: frame captured")
 
             full_response = []
             sentence_count = 0
@@ -2064,7 +1601,7 @@ class VoiceAssistant:
             if use_server_llm:
                 # SERVER LLM MODE: Use server's chat_stream endpoint
                 if images:
-                    print("  [Vision: server LLM mode does not support images yet]", file=sys.stderr)
+                    logger.debug("Vision: server LLM mode does not support images yet")
                     images = None
                 if self.config.stream_llm:
                     try:
@@ -2086,7 +1623,7 @@ class VoiceAssistant:
                             if sentence_count == 1:
                                 first_sentence_time = time.perf_counter() - llm_start
                                 if self.config.verbose:
-                                    print(f"  [LLM first sentence: {first_sentence_time*1000:.0f}ms]", file=sys.stderr)
+                                    logger.debug("LLM first sentence: %.0fms", first_sentence_time * 1000)
 
                             # Synthesize and play immediately
                             tts_result = self.engine.synthesize(
@@ -2098,12 +1635,12 @@ class VoiceAssistant:
                             if first_audio_time is None:
                                 first_audio_time = time.perf_counter() - llm_start
                                 if self.config.verbose:
-                                    print(f"  [First audio ready: {first_audio_time*1000:.0f}ms]", file=sys.stderr)
+                                    logger.debug("First audio ready: %.0fms", first_audio_time * 1000)
 
                             self.audio_output.play_blocking(tts_result.audio, tts_result.sample_rate)
 
                     except Exception as e:
-                        print(f"  [Server stream error: {e}]", file=sys.stderr)
+                        logger.error("Server stream error: %s", e)
 
                     response_text = " ".join(full_response) if full_response else "(no response)"
                 else:
@@ -2120,7 +1657,7 @@ class VoiceAssistant:
                     llm_time = time.perf_counter() - llm_start
 
                     if self.config.verbose:
-                        print(f"  [LLM: {llm_time*1000:.0f}ms]", file=sys.stderr)
+                        logger.debug("LLM: %.0fms", llm_time * 1000)
 
                     # Synthesize full response
                     tts_result = self.engine.synthesize(
@@ -2168,7 +1705,7 @@ class VoiceAssistant:
                                 buffer_mode = False
                                 if self.config.verbose:
                                     llm_time = time.perf_counter() - llm_start
-                                    print(f"  [LLM: {llm_time*1000:.0f}ms]", file=sys.stderr)
+                                    logger.debug("LLM: %.0fms", llm_time * 1000)
 
                         if buffer_mode:
                             # Accumulate — will parse as tool call after stream ends
@@ -2185,11 +1722,11 @@ class VoiceAssistant:
                         if first_audio_time is None:
                             first_audio_time = time.perf_counter() - llm_start
                             if self.config.verbose:
-                                print(f"  [First audio: {first_audio_time*1000:.0f}ms]", file=sys.stderr)
+                                logger.debug("First audio: %.0fms", first_audio_time * 1000)
                         self.audio_output.play_blocking(tts_result.audio, tts_result.sample_rate)
 
                 except Exception as e:
-                    print(f"  [Stream error: {e}]", file=sys.stderr)
+                    logger.error("Stream error: %s", e)
 
                 response_text = " ".join(full_response) if full_response else ""
 
@@ -2226,7 +1763,7 @@ class VoiceAssistant:
 
                     llm_time = time.perf_counter() - llm_start
                     if self.config.verbose:
-                        print(f"  [LLM+Tool: {llm_time*1000:.0f}ms]", file=sys.stderr)
+                        logger.debug("LLM+Tool: %.0fms", llm_time * 1000)
                     self._speak_sentences(response_text)
                 elif not response_text:
                     response_text = "(no response)"
@@ -2241,7 +1778,7 @@ class VoiceAssistant:
                 llm_time = time.perf_counter() - llm_start
 
                 if self.config.verbose:
-                    print(f"  [LLM: {llm_time*1000:.0f}ms]", file=sys.stderr)
+                    logger.debug("LLM: %.0fms", llm_time * 1000)
 
                 # Check for prompt-based tool call
                 tool_results = []
@@ -2264,7 +1801,7 @@ class VoiceAssistant:
                 # Speak response sentence-by-sentence (supports barge-in)
                 self._speak_sentences(response_text)
 
-            print(f"Assistant: {response_text}", file=sys.stderr)
+            logger.info("Assistant: %s", response_text)
             self._update_preview(state="SPEAKING", vlm_text=response_text)
 
             # Update conversation history — when tools were called, store the
@@ -2284,7 +1821,7 @@ class VoiceAssistant:
             self._update_preview(state="IDLE")
 
         except Exception as e:
-            print(f"Error: {e}", file=sys.stderr)
+            logger.error("Error processing speech: %s", e)
             self._set_state(AssistantState.ERROR)
 
             if self.config.play_chimes:
@@ -2342,7 +1879,7 @@ class VoiceAssistant:
         for sentence in sentences:
             # Check barge-in before synthesizing next sentence
             if self._bargein_event.is_set():
-                print("  [Barge-in — stopping speech]", file=sys.stderr)
+                logger.debug("Barge-in — stopping speech")
                 return False
 
             tts_result = self.engine.synthesize(
@@ -2381,7 +1918,7 @@ class VoiceAssistant:
 
             # Check if barge-in killed aplay
             if self._bargein_event.is_set():
-                print("  [Barge-in — stopping speech]", file=sys.stderr)
+                logger.debug("Barge-in — stopping speech")
                 return False
 
         return True
@@ -2416,7 +1953,7 @@ class VoiceAssistant:
         Returns:
             Transcribed text or None
         """
-        print("Listening...", file=sys.stderr)
+        logger.info("Listening...")
 
         if self.config.play_chimes:
             self.audio_output.play_blocking(
@@ -2505,10 +2042,10 @@ def run_assistant(
     # Create and configure engine
     engine = Engine()
 
-    print("Loading TTS backend...", file=sys.stderr)
+    logger.info("Loading TTS backend...")
     engine.load_tts_backend(tts_backend)
 
-    print("Loading STT backend...", file=sys.stderr)
+    logger.info("Loading STT backend...")
     engine.load_stt_backend(stt_backend)
 
     # Configure assistant

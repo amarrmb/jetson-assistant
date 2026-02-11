@@ -4,8 +4,10 @@ Embedding models for RAG.
 Converts text to dense vector representations for semantic search.
 """
 
-import sys
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -57,10 +59,10 @@ class EmbeddingModel:
                 "Install with: pip install sentence-transformers"
             )
 
-        print(f"Loading embedding model: {self.model_name}...", file=sys.stderr)
+        logger.info("Loading embedding model: %s...", self.model_name)
         self._model = SentenceTransformer(self.model_name, device=self.device)
         self._dimension = self._model.get_sentence_embedding_dimension()
-        print(f"Embedding model loaded! (dim={self._dimension})", file=sys.stderr)
+        logger.info("Embedding model loaded! (dim=%d)", self._dimension)
 
     @property
     def dimension(self) -> int:
@@ -128,7 +130,7 @@ class OpenAIEmbedding(EmbeddingModel):
             raise ValueError("OpenAI API key required")
 
         self._client = OpenAI(api_key=api_key)
-        print(f"OpenAI embedding model: {self.model}", file=sys.stderr)
+        logger.info("OpenAI embedding model: %s", self.model)
 
     def embed(self, texts: list[str]) -> np.ndarray:
         """Embed texts using OpenAI API."""

@@ -4,8 +4,10 @@ Qwen3-TTS backend implementation.
 Ported from qwen-tts.sh standalone script.
 """
 
-import sys
+import logging
 from typing import Any, Iterator
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -82,7 +84,7 @@ class QwenBackend(TTSBackend):
 
         self._model_size = model_size
 
-        print(f"Loading Qwen3-TTS ({model_size})...", file=sys.stderr)
+        logger.info("Loading Qwen3-TTS (%s)...", model_size)
 
         model_path = snapshot_download(
             f"Qwen/Qwen3-TTS-12Hz-{model_size}-CustomVoice"
@@ -98,7 +100,7 @@ class QwenBackend(TTSBackend):
         )
 
         self._loaded = True
-        print("Model loaded!", file=sys.stderr)
+        logger.info("Qwen3-TTS model loaded")
 
     def synthesize(
         self,

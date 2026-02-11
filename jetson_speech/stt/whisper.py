@@ -4,8 +4,10 @@ Whisper STT backend implementation.
 Uses faster-whisper for optimized inference.
 """
 
-import sys
+import logging
 from typing import Any, Iterator
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -53,7 +55,7 @@ class WhisperBackend(STTBackend):
         self._device = device
         self._compute_type = compute_type
 
-        print(f"Loading Whisper ({model_size})...", file=sys.stderr)
+        logger.info("Loading Whisper (%s)...", model_size)
 
         # Determine device - try CUDA first, fall back to CPU
         if device == "auto":
@@ -80,7 +82,7 @@ class WhisperBackend(STTBackend):
             )
         except ValueError as e:
             if "CUDA" in str(e) and device == "cuda":
-                print("CUDA not available in ctranslate2, falling back to CPU", file=sys.stderr)
+                logger.warning("CUDA not available in ctranslate2, falling back to CPU")
                 device = "cpu"
                 compute_type = "int8"
                 self._model = WhisperModel(
@@ -92,7 +94,7 @@ class WhisperBackend(STTBackend):
                 raise
 
         self._loaded = True
-        print(f"Whisper model loaded on {device}!", file=sys.stderr)
+        logger.info("Whisper model loaded on %s", device)
 
     def transcribe(
         self,

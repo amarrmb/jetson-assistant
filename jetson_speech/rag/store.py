@@ -4,9 +4,11 @@ Vector store for RAG.
 Stores embeddings and enables similarity search.
 """
 
-import sys
+import logging
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -72,7 +74,7 @@ class VectorStore:
             metadata={"hnsw:space": "cosine"},  # Use cosine similarity
         )
 
-        print(f"Vector store ready: {self.collection_name} ({self.count()} documents)", file=sys.stderr)
+        logger.info("Vector store ready: %s (%d documents)", self.collection_name, self.count())
 
     @property
     def collection(self):

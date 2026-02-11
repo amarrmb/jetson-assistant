@@ -6,8 +6,10 @@ in its own thread with confidence voting. Continuous monitoring with cooldown
 (not one-shot like the original VisionMonitor).
 """
 
-import sys
+import logging
 import threading
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -117,10 +119,7 @@ class MultiWatchMonitor:
             self._watches[camera_name] = task
 
         thread.start()
-        print(
-            f"MultiWatch: watching '{camera_name}' for '{condition.description}'",
-            file=sys.stderr,
-        )
+        logger.info("MultiWatch: watching '%s' for '%s'", camera_name, condition.description)
         return f"Watching {camera_name} for: {condition.description}."
 
     def stop_watching(self, camera_name: Optional[str] = None) -> str:
@@ -178,7 +177,7 @@ class MultiWatchMonitor:
             return
         task.stop_event.set()
         task.thread.join(timeout=5.0)
-        print(f"MultiWatch: stopped '{camera_name}'", file=sys.stderr)
+        logger.info("MultiWatch: stopped '%s'", camera_name)
 
     def _monitor_loop(
         self,
@@ -205,7 +204,7 @@ class MultiWatchMonitor:
             try:
                 detected = self._check_fn(condition.prompt, frame_b64)
             except Exception as e:
-                print(f"MultiWatch [{camera_name}]: check error: {e}", file=sys.stderr)
+                logger.error("MultiWatch [%s]: check error: %s", camera_name, e)
                 detected = False
 
             # Sliding window confidence voting
@@ -214,10 +213,10 @@ class MultiWatchMonitor:
                 votes = votes[-self._vote_window:]
 
             positive = sum(votes)
-            print(
-                f"MultiWatch [{camera_name}]: confidence {positive}/{len(votes)} "
-                f"(need {self._confidence_threshold}/{self._vote_window})",
-                file=sys.stderr,
+            logger.debug(
+                "MultiWatch [%s]: confidence %d/%d (need %d/%d)",
+                camera_name, positive, len(votes),
+                self._confidence_threshold, self._vote_window,
             )
 
             if positive >= self._confidence_threshold and self._can_speak_fn():
@@ -226,14 +225,11 @@ class MultiWatchMonitor:
 
                 # Reset votes and enter cooldown
                 votes.clear()
-                print(
-                    f"MultiWatch [{camera_name}]: cooldown {self._cooldown_s}s",
-                    file=sys.stderr,
-                )
+                logger.debug("MultiWatch [%s]: cooldown %.0fs", camera_name, self._cooldown_s)
                 stop_event.wait(self._cooldown_s)
                 if stop_event.is_set():
                     return
-                print(f"MultiWatch [{camera_name}]: resuming watch", file=sys.stderr)
+                logger.debug("MultiWatch [%s]: resuming watch", camera_name)
 
             # Sleep between polls (interruptible)
             stop_event.wait(self._poll_interval)

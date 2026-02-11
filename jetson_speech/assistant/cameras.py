@@ -12,8 +12,10 @@ Requires: opencv-python-headless >= 4.8.0
 """
 
 import json
-import sys
+import logging
 import threading
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
@@ -68,10 +70,9 @@ class CameraPool:
             self._cv2 = cv2
             return True
         except ImportError:
-            print(
+            logger.error(
                 "CameraPool: opencv-python-headless not installed. "
-                "Install with: pip install opencv-python-headless",
-                file=sys.stderr,
+                "Install with: pip install opencv-python-headless"
             )
             return False
 
@@ -100,7 +101,7 @@ class CameraPool:
                 if source.name not in self._locks:
                     self._locks[source.name] = threading.Lock()
         except (json.JSONDecodeError, OSError) as e:
-            print(f"CameraPool: config load error: {e}", file=sys.stderr)
+            logger.error("CameraPool: config load error: %s", e)
 
     def _save_config(self) -> None:
         """Persist current sources to JSON config file."""
@@ -114,7 +115,7 @@ class CameraPool:
             self._config_path.parent.mkdir(parents=True, exist_ok=True)
             self._config_path.write_text(json.dumps(data, indent=2))
         except OSError as e:
-            print(f"CameraPool: config save error: {e}", file=sys.stderr)
+            logger.error("CameraPool: config save error: %s", e)
 
     def reload(self) -> int:
         """Re-read config file. Returns number of cameras loaded."""
@@ -317,18 +318,18 @@ class CameraPool:
                 cap = cv2.VideoCapture(cap_arg)
 
             if not cap.isOpened():
-                print(f"CameraPool: failed to open '{name}' ({source.url})", file=sys.stderr)
+                logger.warning("CameraPool: failed to open '%s' (%s)", name, source.url)
                 return False
 
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, source.width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, source.height)
 
             self._captures[name] = cap
-            print(f"CameraPool: opened '{name}' ({source.url})", file=sys.stderr)
+            logger.info("CameraPool: opened '%s' (%s)", name, source.url)
             return True
 
         except Exception as e:
-            print(f"CameraPool: error opening '{name}': {e}", file=sys.stderr)
+            logger.error("CameraPool: error opening '%s': %s", name, e)
             return False
 
     def _reconnect(self, name: str) -> bool:

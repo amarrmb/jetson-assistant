@@ -4,8 +4,10 @@ RAG (Retrieval Augmented Generation) routes for the speech server.
 Provides endpoints for managing RAG collections and searching.
 """
 
-import sys
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException
 
@@ -38,7 +40,7 @@ def get_rag(collection: str, create_if_missing: bool = False):
                 return None  # Collection is empty and we don't want to create
 
             _rag_instances[collection] = rag
-            print(f"RAG loaded: {collection} ({rag.count()} chunks)", file=sys.stderr)
+            logger.info("RAG loaded: %s (%d chunks)", collection, rag.count())
 
         except ImportError as e:
             raise HTTPException(

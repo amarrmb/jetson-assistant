@@ -12,8 +12,10 @@ Requires a vLLM container serving a Whisper model:
 """
 
 import io
-import sys
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -60,11 +62,11 @@ class VLLMWhisperBackend(STTBackend):
             models = resp.json().get("data", [])
             if models:
                 self._model_name = models[0]["id"]
-                print(f"vLLM Whisper: connected, model={self._model_name}", file=sys.stderr)
+                logger.info("vLLM Whisper: connected, model=%s", self._model_name)
             else:
-                print("vLLM Whisper: connected but no models found", file=sys.stderr)
+                logger.warning("vLLM Whisper: connected but no models found")
         except Exception as e:
-            print(f"vLLM Whisper: could not query models ({e}), using default={self._model_name}", file=sys.stderr)
+            logger.warning("vLLM Whisper: could not query models (%s), using default=%s", e, self._model_name)
 
         self._loaded = True
 
