@@ -41,12 +41,12 @@ jetson-assistant assistant [OPTIONS]
 
 Options:
   -w, --wake-word TEXT     Wake word (default: hey_jarvis)
-  --tts TEXT              TTS backend (default: qwen)
+  --tts TEXT              TTS backend (default: piper)
   --stt TEXT              STT backend (default: whisper)
   --stt-model TEXT        STT model size (default: base)
   -l, --llm TEXT          LLM backend: ollama, openai, anthropic, simple
   -m, --llm-model TEXT    LLM model name (default: llama3.2:3b)
-  -v, --voice TEXT        TTS voice (default: Chelsie)
+  -v, --voice TEXT        TTS voice (default: en_US-amy-medium)
   --verbose               Show timing info
   --no-wake               Skip wake word (always listening)
 ```
@@ -75,7 +75,7 @@ jetson-assistant assistant --llm openai --llm-model gpt-4o-mini
 
 # Anthropic (requires ANTHROPIC_API_KEY)
 export ANTHROPIC_API_KEY=sk-...
-jetson-assistant assistant --llm anthropic --llm-model claude-3-haiku-20240307
+jetson-assistant assistant --llm anthropic --llm-model claude-haiku-4-5-20251001
 ```
 
 ### Testing Without LLM
@@ -101,7 +101,7 @@ config = AssistantConfig(
     wake_word="hey_jarvis",
     llm_backend="ollama",
     llm_model="llama3.2:3b",
-    tts_voice="Chelsie",
+    tts_voice="en_US-amy-medium",
     verbose=True,
 )
 
@@ -216,7 +216,7 @@ llm = OpenAILLM(
 from jetson_assistant.assistant.llm import AnthropicLLM
 
 llm = AnthropicLLM(
-    model="claude-3-haiku-20240307",
+    model="claude-haiku-4-5-20251001",
     system_prompt="You are a helpful assistant."
 )
 ```

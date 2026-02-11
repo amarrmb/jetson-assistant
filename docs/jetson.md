@@ -4,11 +4,12 @@ This guide covers setting up Jetson Assistant on NVIDIA Jetson devices.
 
 ## Supported Devices
 
-- Jetson Orin Nano
-- Jetson Orin NX
+- Jetson Thor (AGX Thor)
 - Jetson AGX Orin
-- Jetson Xavier NX
+- Jetson Orin NX
+- Jetson Orin Nano
 - Jetson AGX Xavier
+- Jetson Xavier NX
 
 ## Prerequisites
 
@@ -93,10 +94,11 @@ echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab
 
 | Device | RAM | Recommended TTS | Recommended STT |
 |--------|-----|-----------------|-----------------|
-| Orin Nano (4GB) | 4GB | Piper | Whisper tiny |
-| Orin Nano (8GB) | 8GB | Qwen 0.6B | Whisper base |
+| Thor (128GB) | 128GB | Kokoro / Qwen 1.7B | Nemotron |
+| AGX Orin (64GB) | 64GB | Kokoro / Qwen 1.7B | Nemotron / Whisper large |
 | Orin NX | 8-16GB | Qwen 0.6B | Whisper small |
-| AGX Orin | 32-64GB | Qwen 1.7B | Whisper large |
+| Orin Nano (8GB) | 8GB | Qwen 0.6B | Whisper base |
+| Orin Nano (4GB) | 4GB | Piper | Whisper tiny |
 
 ## Power Modes
 

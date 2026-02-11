@@ -140,6 +140,7 @@ def create_app(
     # Mount Gradio UI if enabled
     if enable_webui:
         try:
+            import gradio as gr
             from webui.app import create_gradio_app
 
             gradio_app = create_gradio_app()

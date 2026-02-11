@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
-    { name = "Baskd", email = "hello@baskd.io" }
+    { name = "DeviceNexus.ai", email = "hello@devicenexus.ai" }
 ]
 keywords = ["tts", "stt", "speech", "jetson", "edge", "qwen", "whisper", "kokoro", "nemotron"]
 classifiers = [

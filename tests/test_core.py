@@ -76,7 +76,7 @@ class TestAudioProcessing:
         # Should be audio1 + 500 samples silence + audio2
         assert len(result) == 2500
         assert result[0] == 1  # From audio1
-        assert result[1500] == 0  # Silence
+        assert result[1250] == 0  # Silence (indices 1000-1499)
         assert result[-1] == 2  # From audio2
 
     def test_audio_to_bytes(self):

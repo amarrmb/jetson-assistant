@@ -266,19 +266,19 @@ ws.onmessage = (event) => {
 
 ```python
 from jetson_assistant import Engine
-from jetson_assistant.tts import QwenBackend
 
 # Initialize engine
 engine = Engine()
-engine.load_tts_backend(QwenBackend())
+engine.load_tts_backend("qwen")
 
 # Generate speech
 result = engine.synthesize("Hello world", voice="serena")
 result.save("output.wav")
 
 # Transcribe audio
-text = engine.transcribe("recording.wav")
-print(text)
+engine.load_stt_backend("whisper")
+result = engine.transcribe("recording.wav")
+print(result.text)
 ```
 
 ## Configuration
