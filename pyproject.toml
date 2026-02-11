@@ -1,0 +1,138 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jetson-speech"
+version = "0.1.0"
+description = "Modular TTS + STT server for Jetson/edge devices"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "Baskd", email = "hello@baskd.io" }
+]
+keywords = ["tts", "stt", "speech", "jetson", "edge", "qwen", "whisper", "kokoro", "nemotron"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.20.0",
+    "websockets>=10.0",
+    "pydantic>=2.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pypdf>=3.0.0",
+    "docx2txt>=0.8",
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# TTS backends
+qwen = [
+    "qwen-tts",
+    "torch>=2.0.0",
+    "huggingface-hub>=0.20.0",
+    "flash-attn>=2.0.0",
+]
+piper = [
+    "piper-tts",
+]
+kokoro = [
+    "kokoro>=0.9.4",
+    "soundfile>=0.12.0",
+]
+
+# STT backends
+whisper = [
+    "faster-whisper>=1.0.0",
+]
+sensevoice = [
+    "funasr>=1.0.0",
+]
+nemotron = [
+    "nemo_toolkit[asr]>=2.0.0",
+]
+
+# UI & tools
+webui = [
+    "gradio>=4.0",
+]
+benchmark = [
+    "psutil>=5.9.0",
+]
+
+# Voice assistant
+assistant = [
+    "openwakeword>=0.5.0",
+    "ollama>=0.2.0",
+    "sounddevice>=0.4.6",
+    "webrtcvad>=2.0.10",
+]
+assistant-cloud = [
+    "openai>=1.0.0",
+    "anthropic>=0.20.0",
+]
+assistant-porcupine = [
+    "pvporcupine>=3.0.0",
+]
+
+# Vision support
+vision = [
+    "opencv-python-headless>=4.8.0",
+]
+search = [
+    "duckduckgo-search>=7.0",
+]
+aether = [
+    "aether-sdk",
+    "websocket-client>=1.0.0",
+]
+
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.24.0",
+    "ruff>=0.1.0",
+]
+
+# All backends
+all = [
+    "jetson-speech[qwen,piper,kokoro,whisper,nemotron,webui,benchmark,assistant,vision,search]",
+]
+
+[project.scripts]
+jetson-speech = "jetson_speech.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/baskd/jetson-speech"
+Documentation = "https://github.com/baskd/jetson-speech#readme"
+Repository = "https://github.com/baskd/jetson-speech"
+Issues = "https://github.com/baskd/jetson-speech/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["jetson_speech", "webui"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

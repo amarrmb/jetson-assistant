@@ -1,0 +1,34 @@
+# Desktop (x86 + NVIDIA GPU) — Development/Testing
+#
+# Uses Ollama for LLM (easy setup), Piper TTS, Whisper CPU STT.
+# Good for developing and testing without Jetson hardware.
+#
+# Prerequisites:
+#   ollama serve                      # start Ollama
+#   ollama pull llama3.2:3b           # or any chat model
+#   pip install -e ".[whisper,assistant,vision]"
+#
+# Usage:
+#   jetson-speech assistant --config configs/desktop.yaml
+
+# TTS: Piper (fast, works everywhere)
+tts_backend: piper
+tts_voice: "en_US-amy-medium"
+
+# STT: Whisper CPU (slower but no GPU container needed)
+stt_backend: whisper
+stt_model: base
+
+# LLM: Ollama (local, easy setup)
+llm_backend: ollama
+llm_host: "http://localhost:11434"
+llm_model: "llama3.2:3b"
+
+# Vision: disabled by default (enable with --vision)
+vision_enabled: false
+
+# Wake word enabled (desktop has mic always on)
+wake_word: hey_jarvis
+wake_word_backend: openwakeword
+
+verbose: false

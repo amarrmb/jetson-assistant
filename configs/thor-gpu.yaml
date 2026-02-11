@@ -1,0 +1,35 @@
+# Jetson Thor — Full GPU Pipeline (~890ms end-to-end)
+#
+# NVFP4 7B VLM + Piper TTS + vLLM Whisper STT
+# All inference on GPU. Slightly slower than SOTA but no in-process models.
+#
+# Prerequisites:
+#   docker compose up -d                      # starts vLLM NVFP4 7B
+#   docker compose --profile gpu-stt up -d    # starts vLLM Whisper
+#   pip install -e ".[assistant,vision]"
+#
+# Usage:
+#   jetson-speech assistant --config configs/thor-gpu.yaml
+
+# TTS: Piper (fast, clean English)
+tts_backend: piper
+tts_voice: "en_US-amy-medium"
+
+# STT: vLLM Whisper on GPU (~126ms)
+stt_backend: vllm
+stt_host: "http://localhost:8002/v1"
+
+# VLM: vLLM Qwen2.5-VL-7B NVFP4 (container on port 8001)
+llm_backend: vllm
+llm_host: "http://localhost:8001/v1"
+llm_model: "nvidia/Qwen2.5-VL-7B-Instruct-NVFP4"
+
+# Vision: camera + MJPEG browser stream
+vision_enabled: true
+stream_vision_port: 9090
+
+# Always listening (no wake word)
+wake_word_backend: energy
+
+# Show timing info
+verbose: true
