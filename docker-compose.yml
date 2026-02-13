@@ -1,7 +1,7 @@
 # Jetson Assistant — GPU Backend Services
 #
 # Start the VLM backend for your hardware:
-#   docker compose up -d                      # Thor NVFP4 (default, fastest)
+#   docker compose up -d                      # starts vLLM + assistant
 #   docker compose --profile thor-bf16 up -d  # Thor BF16 7B
 #   docker compose --profile orin up -d       # AGX Orin 64GB
 #
@@ -108,3 +108,19 @@ services:
       timeout: 10s
       retries: 10
       start_period: 120s
+
+  # ── Voice Assistant (Kokoro TTS + Nemotron STT, waits for vLLM) ────────
+  assistant:
+    image: ghcr.io/amarrmb/jetson-assistant:thor
+    build: .
+    <<: *common
+    container_name: jetson-assistant
+    devices:
+      - /dev/snd    # ALSA audio I/O (mic + speaker)
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      - TORCH_COMPILE_DISABLE=1
+    depends_on:
+      vllm:
+        condition: service_healthy
