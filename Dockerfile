@@ -61,6 +61,11 @@ RUN pip install --no-cache-dir --break-system-packages \
     sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0 openai>=1.0 \
     "setuptools<82"
 
+# Pre-download spacy model (Kokoro TTS dependency, ~13MB)
+# Use pip directly — `spacy download` imports torch which needs NVPL (runtime only)
+RUN pip install --no-cache-dir --break-system-packages \
+    https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+
 # Remove PEP 668 marker so runtime pip calls (e.g. Kokoro voice download) work
 RUN rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
 
