@@ -25,6 +25,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Audio: espeak-ng (Kokoro dep), ALSA, portaudio, sndfile, ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-dev \
+    build-essential \
     espeak-ng libespeak-ng1 \
     libsndfile1 ffmpeg alsa-utils \
     portaudio19-dev libasound2-dev \
@@ -46,9 +47,13 @@ RUN pip install --no-cache-dir --break-system-packages \
     && rm -rf /tmp/wheels
 
 # ── 3. Application + recommended backends ─────────────────────────────────
+# Note: [assistant] extra includes openwakeword which needs tflite-runtime
+# (no aarch64 wheel). The Thor demo uses energy-based wake word detection,
+# so we install assistant deps individually, skipping openwakeword.
 COPY . .
 RUN pip install --no-cache-dir --break-system-packages \
-    -e ".[kokoro,nemotron,assistant,vision]"
+    -e ".[kokoro,nemotron,vision]" \
+    sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0
 
 EXPOSE 8080 9090
 
