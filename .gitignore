@@ -15,7 +15,8 @@ lib64/
 parts/
 sdist/
 var/
-wheels/
+# Pre-built wheels (too large for git — distribute via GitHub Releases)
+wheels/*.whl
 *.egg-info/
 .installed.cfg
 *.egg
