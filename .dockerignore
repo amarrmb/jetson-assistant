@@ -12,7 +12,8 @@ examples/
 *.jpg
 *.mp4
 *.gif
-*.md
+CLAUDE.md
+SOTA_*.md
 Dockerfile
 docker-compose.yml
 .gitignore
