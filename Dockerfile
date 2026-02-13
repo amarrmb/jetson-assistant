@@ -44,8 +44,10 @@ RUN pip install --no-cache-dir --break-system-packages \
 
 # ── 2. Pre-built flash-attn (sm_110 — saves ~1hr compile on Thor) ────────
 # Build your own: see wheels/README.md
+# Triton is needed by flash-attn's rotary embedding ops (used by transformers)
 COPY wheels/ /tmp/wheels/
 RUN pip install --no-cache-dir --break-system-packages \
+    triton \
     /tmp/wheels/flash_attn-*.whl \
     && rm -rf /tmp/wheels
 
@@ -56,8 +58,11 @@ RUN pip install --no-cache-dir --break-system-packages \
 COPY . .
 RUN pip install --no-cache-dir --break-system-packages \
     -e ".[kokoro,nemotron,vision]" \
-    sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0 \
+    sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0 openai>=1.0 \
     "setuptools<82"
+
+# Remove PEP 668 marker so runtime pip calls (e.g. Kokoro voice download) work
+RUN rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
 
 EXPOSE 8080 9090
 
