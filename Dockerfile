@@ -11,15 +11,18 @@
 #   docker compose up -d       # starts vLLM + assistant
 #
 # Adapting for other platforms:
+#   - Change the base image CUDA version
 #   - Change the PyTorch index URL for your CUDA version
 #   - Rebuild flash-attn for your GPU arch (see wheels/README.md)
 #   - Adjust configs/ for your hardware
 
-FROM ubuntu:24.04
+FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TORCH_COMPILE_DISABLE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=all
 
 # ── System dependencies ──────────────────────────────────────────────────
 # Audio: espeak-ng (Kokoro dep), ALSA, portaudio, sndfile, ffmpeg
@@ -53,7 +56,8 @@ RUN pip install --no-cache-dir --break-system-packages \
 COPY . .
 RUN pip install --no-cache-dir --break-system-packages \
     -e ".[kokoro,nemotron,vision]" \
-    sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0
+    sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0 \
+    "setuptools<82"
 
 EXPOSE 8080 9090
 
