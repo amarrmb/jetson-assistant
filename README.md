@@ -11,6 +11,10 @@ Ask it questions, point a camera, get spoken answers in ~700ms.
 ## Try It (Jetson Thor)
 
 ```bash
+# SSH into your Jetson Thor
+git clone https://github.com/amarrmb/jetson-assistant.git
+cd jetson-assistant
+
 # Reclaim GPU memory (recommended before first run)
 sudo sysctl -w vm.drop_caches=3
 
