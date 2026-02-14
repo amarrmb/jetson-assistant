@@ -19,7 +19,28 @@ docker compose up -d                    # pulls ~12GB, vLLM loads model (~5 min)
 docker compose logs -f assistant        # watch it come up
 ```
 
-Plug in a mic and speaker. Say "What time is it?" or "What do you see?" (with a USB camera).
+Plug in a mic and speaker, and start talking:
+
+```
+"What time is it?"                          → built-in clock
+"What do you see?"                          → VLM describes the camera feed
+"Take a photo"                              → saves a snapshot to ~/photos
+"Watch the camera for someone approaching"  → background VLM monitoring + alert
+"Remember that my wifi password is abc123"  → persistent memory
+"What do I have saved?"                     → recall memories
+"Set a timer for 60 seconds"                → spoken countdown alert
+"How's the system doing?"                   → CPU temp, memory, uptime
+"Search the web for NVIDIA GTC 2026"        → DuckDuckGo live search
+"Speak in Japanese"                         → switches TTS + LLM language
+```
+
+With multi-camera (`--camera-config`):
+```
+"What cameras do I have?"                   → lists all registered cameras
+"What's happening at the front door?"       → VLM checks a named camera
+"Watch the garage for the door opening"     → per-camera background monitor
+"Add a camera called patio at rtsp://..."   → register by voice
+```
 
 To stop: `docker compose down`
 
