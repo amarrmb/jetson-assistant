@@ -21,6 +21,60 @@ logger = logging.getLogger(__name__)
 import numpy as np
 
 
+def _find_usb_audio_device(kind: str = "input") -> Optional[int]:
+    """Auto-detect a USB audio device, preferring devices with both input and output.
+
+    On Jetson, the system default is often an HDMI or APE virtual device with no
+    real microphone. This scans for USB audio devices and picks the best one.
+
+    Args:
+        kind: "input" or "output"
+
+    Returns:
+        Device index, or None if no USB device found.
+    """
+    try:
+        import sounddevice as sd
+    except ImportError:
+        return None
+
+    # Virtual/internal devices to skip
+    _SKIP = {"HDMI", "HDA", "APE", "DisplayPort"}
+    need_input = kind == "input"
+    need_output = kind == "output"
+
+    best = None
+    best_score = -1
+
+    for i, dev in enumerate(sd.query_devices()):
+        name = dev["name"]
+        has_in = dev["max_input_channels"] > 0
+        has_out = dev["max_output_channels"] > 0
+
+        # Skip virtual/internal devices
+        if any(skip in name for skip in _SKIP):
+            continue
+
+        # Must have the channels we need
+        if need_input and not has_in:
+            continue
+        if need_output and not has_out:
+            continue
+
+        # Score: prefer devices with both in+out (speakerphones), then USB keyword
+        score = 0
+        if has_in and has_out:
+            score += 2  # bidirectional (speakerphone) preferred
+        if "USB" in name:
+            score += 1
+
+        if score > best_score:
+            best = i
+            best_score = score
+
+    return best
+
+
 @dataclass
 class AudioConfig:
     """Audio configuration."""
@@ -198,18 +252,25 @@ class AudioInput:
             ) from e
 
         self.config = config or AudioConfig()
-        self.device = device
         self._sd = sd
 
         self._stream = None
         self._callback = None
         self._running = False
 
-        # Get device info
+        # Auto-detect USB audio device if none specified
         if device is None:
+            device = _find_usb_audio_device(kind="input")
+            if device is not None:
+                logger.info("Auto-detected USB input device: [%d] %s",
+                            device, sd.query_devices(device)["name"])
+        self.device = device
+
+        # Get device info for logging
+        if self.device is None:
             device_info = sd.query_devices(kind="input")
         else:
-            device_info = sd.query_devices(device)
+            device_info = sd.query_devices(self.device)
 
         logger.info("Audio input: %s", device_info['name'])
 
@@ -288,12 +349,20 @@ class AudioOutput:
             use_aplay: Use aplay for playback (best quality on Linux)
         """
         self.sample_rate = sample_rate
-        self.device = device
         self._use_aplay = use_aplay
 
         self._queue = queue.Queue()
         self._playing = False
         self._thread = None
+
+        # Auto-detect USB audio device if none specified
+        if device is None:
+            device = _find_usb_audio_device(kind="output")
+            if device is not None:
+                import sounddevice as sd
+                logger.info("Auto-detected USB output device: [%d] %s",
+                            device, sd.query_devices(device)["name"])
+        self.device = device
 
         # Check if aplay is available
         if use_aplay:
@@ -308,10 +377,10 @@ class AudioOutput:
                 self._sd = sd
 
                 # Get device info
-                if device is None:
+                if self.device is None:
                     device_info = sd.query_devices(kind="output")
                 else:
-                    device_info = sd.query_devices(device)
+                    device_info = sd.query_devices(self.device)
                 logger.info("Audio output: %s", device_info['name'])
             except ImportError as e:
                 raise ImportError(
@@ -408,7 +477,21 @@ class AudioOutput:
             wavfile.write(f.name, sample_rate, audio)
             try:
                 # Add timeout to prevent hanging
-                subprocess.run(["aplay", "-q", f.name], check=True, timeout=60)
+                cmd = ["aplay", "-q"]
+                # Route to specific ALSA device if we auto-detected one
+                if self.device is not None:
+                    try:
+                        import sounddevice as sd
+                        dev_name = sd.query_devices(self.device)["name"]
+                        # Extract ALSA hw:N,M from device name like "Jabra SPEAK 410 USB: Audio (hw:4,0)"
+                        import re
+                        m = re.search(r"\(hw:(\d+,\d+)\)", dev_name)
+                        if m:
+                            cmd.extend(["-D", f"plughw:{m.group(1)}"])
+                    except Exception:
+                        pass  # Fall back to default ALSA device
+                cmd.append(f.name)
+                subprocess.run(cmd, check=True, timeout=60)
             except subprocess.TimeoutExpired:
                 logger.warning("Audio playback timeout")
             finally:
