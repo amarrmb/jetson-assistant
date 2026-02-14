@@ -11,11 +11,10 @@ Ask it questions, point a camera, get spoken answers in ~700ms.
 ## Try It (Jetson Thor)
 
 ```bash
-git clone https://github.com/amarrmb/jetson-assistant.git
-cd jetson-assistant
-
 sudo sysctl -w vm.drop_caches=3        # reclaim GPU memory
 
+# Download the compose file and start
+curl -fLO https://raw.githubusercontent.com/amarrmb/jetson-assistant/main/docker-compose.yml
 docker compose up -d                    # pulls ~12GB, vLLM loads model (~5 min)
 docker compose logs -f assistant        # watch it come up
 ```
