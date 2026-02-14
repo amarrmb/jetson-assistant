@@ -917,7 +917,14 @@ class VoiceAssistant:
         # Execute each tool call sequentially
         from jetson_assistant.assistant.llm import ToolCallResult
         results = []
+        registered = {d["function"]["name"] for d in self._tools.definitions()}
         for tool_name, args in tool_calls:
+            # Fuzzy-match hallucinated tool names from small LLMs
+            if tool_name not in registered:
+                resolved = self._fuzzy_resolve_tool(tool_name, registered, args)
+                if resolved:
+                    logger.warning("Fuzzy tool match: '%s' → '%s'", tool_name, resolved)
+                    tool_name = resolved
             logger.debug("Tool: %s(%s)", tool_name, args)
             tc = ToolCallResult(name=tool_name, arguments=args)
             result = self._tools.execute(tc)
@@ -927,6 +934,65 @@ class VoiceAssistant:
                 results.append(f"Tool '{tool_name}' not found.")
 
         return " ".join(results) if results else "Got it."
+
+    @staticmethod
+    def _fuzzy_resolve_tool(
+        hallucinated: str, registered: set[str], args: dict
+    ) -> str | None:
+        """Resolve a hallucinated tool name to the closest registered tool.
+
+        Small LLMs (7B) frequently hallucinate tool names like
+        'camera_candy_monitor' instead of 'watch_camera'. This uses
+        keyword overlap + argument hints to find the right tool.
+        """
+        h = hallucinated.lower().replace("-", "_")
+        h_parts = set(h.split("_"))
+
+        # Keyword → tool mapping for common hallucinations
+        keyword_map = {
+            "watch": "watch_camera",
+            "monitor": "watch_camera",
+            "watching": "watch_camera",
+            "surveillance": "watch_camera",
+            "alert": "watch_camera",
+            "stop_watch": "stop_watching_camera",
+            "stop_monitor": "stop_watching_camera",
+            "camera_check": "check_camera",
+            "look_camera": "check_camera",
+            "see_camera": "check_camera",
+            "search": "web_search",
+            "timer": "set_timer",
+            "language": "set_language",
+            "time": "get_time",
+        }
+
+        # Try keyword match first
+        for keyword, tool in keyword_map.items():
+            if tool in registered and keyword in h:
+                return tool
+
+        # Try argument-based hints
+        if "condition" in args and "watch_camera" in registered:
+            return "watch_camera"
+        if "camera_name" in args:
+            if "watch" in h_parts or "monitor" in h_parts:
+                if "watch_camera" in registered:
+                    return "watch_camera"
+            if "check_camera" in registered:
+                return "check_camera"
+
+        # Try word overlap scoring
+        best, best_score = None, 0
+        for tool in registered:
+            t_parts = set(tool.split("_"))
+            overlap = len(h_parts & t_parts)
+            if overlap > best_score:
+                best_score = overlap
+                best = tool
+        if best_score >= 1:
+            return best
+
+        return None
 
     def _on_watch_detected(self, condition, frame_b64: str) -> None:
         """Callback when the vision monitor detects the watched condition."""
