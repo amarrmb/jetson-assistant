@@ -81,6 +81,14 @@ class NemotronBackend(STTBackend):
         # Set to eval mode
         self._model.eval()
 
+        # Disable CUDA graphs for the RNNT decoder — they bind to the
+        # creating thread's CUDA stream and fail when transcribe() is
+        # called from a different thread (which is normal in the voice
+        # assistant's audio processing pipeline).
+        if hasattr(self._model, 'decoding') and hasattr(self._model.decoding, 'disable_cuda_graphs'):
+            self._model.decoding.disable_cuda_graphs()
+            logger.info("Disabled CUDA graphs for Nemotron RNNT decoder")
+
         self._loaded = True
         logger.info("Nemotron Speech loaded on %s", device)
 
