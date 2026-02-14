@@ -23,8 +23,11 @@ Context dict keys consumed by builtin tools:
     knowledge_collection      str | None    RAG collection name
 """
 
+import logging
 import threading
 from typing import Annotated
+
+logger = logging.getLogger(__name__)
 
 from jetson_assistant.assistant.tools import ToolRegistry
 
@@ -432,8 +435,12 @@ def _register_multi_camera_tools(registry: ToolRegistry, context: dict) -> None:
         question: Annotated[str, "What to look for or describe (e.g., 'Is anyone there?', 'Describe what you see')"] = "Describe what you see in this image. Be specific and concise.",
     ) -> str:
         if not pool.has(camera_name):
-            available = ", ".join(s.name for s in pool.list_cameras())
-            return f"Camera '{camera_name}' not found. Available: {available}."
+            cameras = pool.list_cameras()
+            if len(cameras) == 1:
+                camera_name = cameras[0].name
+            else:
+                available = ", ".join(s.name for s in cameras)
+                return f"Camera '{camera_name}' not found. Available: {available}."
 
         frame_b64 = pool.capture_base64(camera_name)
         if frame_b64 is None:
@@ -476,6 +483,66 @@ def _register_multi_camera_tools(registry: ToolRegistry, context: dict) -> None:
 # Multi-camera watch tools
 # ---------------------------------------------------------------------------
 
+def _rewrite_condition_to_state_based(condition: str) -> tuple[str, bool]:
+    """Rewrite action-based watch conditions to state-based ones.
+
+    The VLM polls every ~5s so it can't catch brief actions like a hand
+    grabbing something. Instead we detect the resulting state change.
+
+    Returns (rewritten_condition, invert). When invert=True, the watch
+    triggers when the VLM says NO (absence detection).
+
+    'Is someone taking the candy?' → ('Is there candy visible?', True)
+      → triggers when VLM says NO (candy is gone)
+    'Is someone opening the door?' → ('Is the door open?', False)
+    """
+    import re
+
+    c = condition.strip()
+
+    # Pattern: any sentence about taking/stealing/removing/grabbing an object
+    # Broad match — handles "taking", "trying to take", "going to steal", etc.
+    # → Ask if object is VISIBLE, trigger on NO (absence = someone took it)
+    m = re.search(
+        r"(?:(?:trying|going|about)\s+to\s+)?"
+        r"(?:tak(?:e|ing)|steal(?:ing)?|remov(?:e|ing)|grab(?:bing)?|eat(?:ing)?|snatch(?:ing)?)\s+"
+        r"(?:the\s+|my\s+|our\s+|a\s+)?(.+?)[\?\.]?\s*$",
+        c, re.IGNORECASE,
+    )
+    if m:
+        obj = m.group(1).rstrip("?. ")
+        rewritten = f"Is there {obj} visible in this image?"
+        logger.info("Condition rewrite: %r → %r (inverted)", c, rewritten)
+        return rewritten, True
+
+    # Pattern: "Is someone opening/closing the [object]?"
+    m = re.match(
+        r"(?:Is|Are)\s+(?:someone|anyone|somebody)\s+"
+        r"(opening|closing)\s+"
+        r"(?:the\s+|my\s+)?(.+?)[\?\.]?\s*$",
+        c, re.IGNORECASE,
+    )
+    if m:
+        action, obj = m.group(1).lower(), m.group(2).rstrip("?. ")
+        state = "open" if action == "opening" else "closed"
+        rewritten = f"Is the {obj} {state}?"
+        logger.info("Condition rewrite: %r → %r", c, rewritten)
+        return rewritten, False
+
+    # Pattern: "Is someone arriving/entering/leaving?"
+    m = re.match(
+        r"(?:Is|Are)\s+(?:someone|anyone|somebody|there someone)\s+"
+        r"(arriving|entering|coming|leaving|departing|walking)",
+        c, re.IGNORECASE,
+    )
+    if m:
+        rewritten = "Is there a person visible in the scene?"
+        logger.info("Condition rewrite: %r → %r", c, rewritten)
+        return rewritten, False
+
+    return condition, False
+
+
 def _register_multi_watch_tools(registry: ToolRegistry, context: dict) -> None:
     """Register tools for multi-camera watching/monitoring."""
     multi_watch = context.get("multi_watch")
@@ -500,10 +567,17 @@ def _register_multi_watch_tools(registry: ToolRegistry, context: dict) -> None:
     ) -> str:
         from jetson_assistant.assistant.vision import WatchCondition
 
+        # Rewrite action-based conditions to state-based ones.
+        # The VLM polls every 5s — it can't catch brief actions like
+        # "someone taking X" but CAN detect the resulting state "X is gone".
+        original_condition = condition
+        condition, invert = _rewrite_condition_to_state_based(condition)
+
         wc = WatchCondition(
-            description=condition,
+            description=original_condition,
             prompt=f"{condition} Answer only YES or NO.",
-            announce_template=f"Alert on {camera_name}: {condition}",
+            announce_template=f"Alert on {camera_name}: {original_condition}",
+            invert=invert,
         )
         result = mw.start_watching(camera_name, wc)
         update_preview(

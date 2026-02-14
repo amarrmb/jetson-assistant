@@ -872,6 +872,23 @@ class VoiceAssistant:
             if text.startswith("json"):
                 text = text[4:].strip()
 
+        # Handle malformed tool calls: 'tool_name {"arg": ...}' → proper JSON
+        # Small LLMs sometimes emit 'reachy_see {"question": "..."}' instead of
+        # '{"tool": "reachy_see", "args": {"question": "..."}}'
+        if self._tools and not text.startswith("{"):
+            import re
+            m = re.match(r'^(\w+)\s*(\{.+)', text, re.DOTALL)
+            if m:
+                tool_name_prefix = m.group(1)
+                registered = {d["function"]["name"] for d in self._tools.definitions()}
+                if tool_name_prefix in registered:
+                    try:
+                        args_obj = json.loads(m.group(2))
+                        text = json.dumps({"tool": tool_name_prefix, "args": args_obj})
+                        logger.debug("Reformatted malformed tool call: %s", text[:120])
+                    except json.JSONDecodeError:
+                        pass
+
         # Find all JSON objects in the text by matching balanced braces
         tool_calls = []
         i = 0
@@ -923,8 +940,10 @@ class VoiceAssistant:
             if tool_name not in registered:
                 resolved = self._fuzzy_resolve_tool(tool_name, registered, args)
                 if resolved:
-                    logger.warning("Fuzzy tool match: '%s' → '%s'", tool_name, resolved)
+                    logger.info("Fuzzy tool resolve: '%s' → '%s'", tool_name, resolved)
                     tool_name = resolved
+                else:
+                    logger.warning("Unknown tool '%s', no fuzzy match", tool_name)
             logger.debug("Tool: %s(%s)", tool_name, args)
             tc = ToolCallResult(name=tool_name, arguments=args)
             result = self._tools.execute(tc)
@@ -1009,6 +1028,16 @@ class VoiceAssistant:
         self, camera_name: str, condition, frame_b64
     ) -> None:
         """Callback when the multi-watch monitor detects a condition on a camera."""
+        import time as _time
+
+        # Wait up to 10s for assistant to not be speaking/processing before announcing
+        # IDLE = wake-word mode, LISTENING = always-listen mode — both are "available"
+        for _ in range(20):
+            if self.state not in (AssistantState.SPEAKING, AssistantState.PROCESSING):
+                break
+            logger.debug("Watch alert waiting (state=%s)", self.state.value)
+            _time.sleep(0.5)
+
         msg = f"Alert: {condition.description} detected on {camera_name}!"
         logger.info("MultiWatch: %s", msg)
         self._update_preview(state="SPEAKING", watch_text=f"{camera_name}: detected!")
@@ -1797,8 +1826,18 @@ class VoiceAssistant:
 
                         # Decide mode on first sentence
                         if buffer_mode is None:
-                            if self._tools and sentence.strip().startswith("{"):
+                            stripped_s = sentence.strip()
+                            # Detect tool calls: '{"tool":...}' or 'tool_name {"arg":...}'
+                            looks_like_tool = (
+                                stripped_s.startswith("{")
+                                or ("{" in stripped_s and self._tools and any(
+                                    stripped_s.startswith(d["function"]["name"])
+                                    for d in self._tools.definitions()
+                                ))
+                            )
+                            if self._tools and looks_like_tool:
                                 buffer_mode = True
+                                logger.debug("Stream: buffer_mode=True (tool call)")
                             else:
                                 buffer_mode = False
                                 if self.config.verbose:
@@ -1831,9 +1870,11 @@ class VoiceAssistant:
                 # Tool call detection — only when we buffered (or empty response)
                 if buffer_mode is True and self._tools and response_text.strip():
                     stripped = response_text.strip()
+                    logger.debug("Tool buffer: %s", stripped[:200])
                     self._speak_quick("Let me check on that.")
 
                     tool_result = self._try_parse_tool_call(stripped)
+                    logger.debug("Tool result: %s", tool_result)
                     if tool_result is not None:
                         had_tool_calls = True
                         tool_call_json = stripped  # Preserve for conversation history

@@ -169,6 +169,7 @@ class WatchCondition:
     description: str  # e.g., "an apple"
     prompt: str  # e.g., "Do you see an apple in this image? Answer only YES or NO."
     announce_template: str  # e.g., "I can see an apple now!"
+    invert: bool = False  # If True, trigger when VLM says NO (absence detection)
 
 
 class VisionMonitor:

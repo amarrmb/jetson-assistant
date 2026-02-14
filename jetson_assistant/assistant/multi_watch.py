@@ -92,7 +92,14 @@ class MultiWatchMonitor:
             Confirmation message.
         """
         if not self._camera_pool.has(camera_name):
-            return f"Camera '{camera_name}' not found."
+            # Auto-resolve: if only one camera exists, use it regardless of
+            # what name the LLM hallucinated (e.g. "candy_drawer" → "local")
+            names = [c.name for c in self._camera_pool.list_cameras()]
+            if len(names) == 1:
+                logger.info("Camera '%s' → '%s' (auto-resolve)", camera_name, names[0])
+                camera_name = names[0]
+            else:
+                return f"Camera '{camera_name}' not found. Available: {', '.join(names)}"
 
         # Stop existing watch on this camera
         with self._watches_lock:
@@ -136,7 +143,12 @@ class MultiWatchMonitor:
 
         with self._watches_lock:
             if camera_name not in self._watches:
-                return f"Not watching '{camera_name}'."
+                # Auto-resolve: LLM may use hallucinated name but watch is
+                # registered under the real name (e.g. "local")
+                if len(self._watches) == 1:
+                    camera_name = next(iter(self._watches))
+                else:
+                    return f"Not watching '{camera_name}'."
             self._stop_task(camera_name)
 
         return f"Stopped watching {camera_name}."
@@ -197,12 +209,19 @@ class MultiWatchMonitor:
 
             if frame_b64 is None:
                 # Camera not available, wait and retry
+                logger.debug("MultiWatch [%s]: no frame, retrying", camera_name)
                 stop_event.wait(self._poll_interval)
                 continue
 
             # VLM inference
             try:
-                detected = self._check_fn(condition.prompt, frame_b64)
+                raw_detected = self._check_fn(condition.prompt, frame_b64)
+                # Invert for absence detection: "Is candy visible?" → YES=normal, NO=alert
+                detected = (not raw_detected) if condition.invert else raw_detected
+                logger.debug(
+                    "MultiWatch [%s]: raw=%s invert=%s detected=%s",
+                    camera_name, raw_detected, condition.invert, detected,
+                )
             except Exception as e:
                 logger.error("MultiWatch [%s]: check error: %s", camera_name, e)
                 detected = False
@@ -219,8 +238,10 @@ class MultiWatchMonitor:
                 self._confidence_threshold, self._vote_window,
             )
 
-            if positive >= self._confidence_threshold and self._can_speak_fn():
+            if positive >= self._confidence_threshold:
                 # Condition detected — fire callback
+                logger.info("MultiWatch [%s]: threshold met %d/%d, firing alert",
+                            camera_name, positive, self._confidence_threshold)
                 self._on_detected(camera_name, condition, frame_b64)
 
                 # Reset votes and enter cooldown
