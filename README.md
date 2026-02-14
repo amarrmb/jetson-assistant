@@ -22,6 +22,15 @@ docker compose logs -f assistant        # watch it come up
 > **Note:** vLLM may restart once on first boot due to CUDA graph memory allocation.
 > This is normal — `restart: unless-stopped` handles it automatically. Wait ~5 minutes.
 
+**Audio setup:** Set `ALSA_CARD` to your audio device name (find it with `aplay -l`):
+```bash
+# Example: use a USB speaker/mic
+ALSA_CARD=USB docker compose up -d
+
+# Or use a specific card name
+ALSA_CARD="Jabra" docker compose up -d
+```
+
 Plug in a mic and speaker, and start talking:
 
 ```

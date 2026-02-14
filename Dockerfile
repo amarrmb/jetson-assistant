@@ -59,6 +59,8 @@ RUN pip install --no-cache-dir --break-system-packages \
 # Note: [assistant] extra includes openwakeword which needs tflite-runtime
 # (no aarch64 wheel). The Thor demo uses energy-based wake word detection,
 # so we install assistant deps individually, skipping openwakeword.
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY . .
 RUN pip install --no-cache-dir --break-system-packages \
     -e ".[kokoro,nemotron,vision,search]" \
@@ -75,5 +77,5 @@ RUN rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
 
 EXPOSE 8080 9090
 
-ENTRYPOINT ["jetson-assistant"]
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["assistant", "--config", "configs/thor-sota.yaml"]
