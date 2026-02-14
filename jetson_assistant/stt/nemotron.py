@@ -125,8 +125,15 @@ class NemotronBackend(STTBackend):
             audio_int16 = (audio_float * 32767).astype(np.int16)
             wavfile.write(tmp.name, 16000, audio_int16)
 
-            # Transcribe using file path
-            transcriptions = self._model.transcribe([tmp.name])
+            # Transcribe using file path.
+            # Force CUDA context on this thread (NeMo's RNNT uses CUDA
+            # graph capture, which fails if called from a different thread
+            # than the one that loaded the model).
+            import torch
+            if self._device == "cuda":
+                torch.cuda.set_device(0)
+            with torch.no_grad():
+                transcriptions = self._model.transcribe([tmp.name])
 
         # NeMo returns a list of strings (or Hypothesis objects)
         if isinstance(transcriptions, list) and len(transcriptions) > 0:
