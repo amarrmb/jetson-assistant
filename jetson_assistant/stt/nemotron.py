@@ -81,16 +81,44 @@ class NemotronBackend(STTBackend):
         # Set to eval mode
         self._model.eval()
 
-        # Disable CUDA graphs for the RNNT decoder — they bind to the
-        # creating thread's CUDA stream and fail when transcribe() is
-        # called from a different thread (which is normal in the voice
-        # assistant's audio processing pipeline).
-        if hasattr(self._model, 'decoding') and hasattr(self._model.decoding, 'disable_cuda_graphs'):
-            self._model.decoding.disable_cuda_graphs()
-            logger.info("Disabled CUDA graphs for Nemotron RNNT decoder")
+        # Disable CUDA graphs for the RNNT decoder — they cause
+        # "Capture must end on the same stream" errors in Docker
+        # containers on Jetson Thor (SBSA CUDA runtime).  The graph
+        # controls live on the *inner* decoding object, not the
+        # top-level RNNTBPEDecoding wrapper.
+        self._disable_cuda_graphs()
 
         self._loaded = True
         logger.info("Nemotron Speech loaded on %s", device)
+
+    def _disable_cuda_graphs(self) -> None:
+        """Disable CUDA graph capture in the RNNT decoder.
+
+        NeMo's RNNT greedy decoder uses CUDA graphs for faster
+        inference, but this fails in Docker containers on Jetson Thor
+        with 'Capture must end on the same stream it began on'.
+
+        The graph controls live on the inner GreedyBatchedRNNTInfer
+        (model.decoding.decoding), NOT the outer RNNTBPEDecoding
+        wrapper (model.decoding).
+        """
+        try:
+            inner = getattr(self._model.decoding, "decoding", None)
+            if inner is None:
+                return
+
+            # Disable the top-level flag
+            if hasattr(inner, "use_cuda_graph_decoder"):
+                inner.use_cuda_graph_decoder = False
+                logger.info("Set use_cuda_graph_decoder=False on %s", type(inner).__name__)
+
+            # Disable on the decoding computer (label looping)
+            dc = getattr(inner, "decoding_computer", None)
+            if dc is not None and hasattr(dc, "disable_cuda_graphs"):
+                dc.disable_cuda_graphs()
+                logger.info("Disabled CUDA graphs on %s", type(dc).__name__)
+        except Exception:
+            logger.warning("Could not disable CUDA graphs", exc_info=True)
 
     def transcribe(
         self,
