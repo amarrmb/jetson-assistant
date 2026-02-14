@@ -10,6 +10,7 @@ This is the heart of the assistant that ties together:
 
 import base64
 import logging
+import queue
 import re
 import time
 import threading
@@ -335,6 +336,14 @@ class VoiceAssistant:
 
         # Audio-reactive motion: background thread feeding chunks during playback
         self._audio_feed_thread: Optional[threading.Thread] = None
+
+        # Persistent speech processing thread (keeps CUDA context consistent
+        # for NeMo Nemotron STT which uses CUDA graph capture)
+        self._speech_queue: queue.Queue = queue.Queue()
+        self._speech_worker = threading.Thread(
+            target=self._speech_worker_loop, daemon=True
+        )
+        self._speech_worker.start()
 
         logger.info("Voice assistant initialized")
 
@@ -1437,8 +1446,8 @@ class VoiceAssistant:
         if self.config.verbose:
             logger.debug("Processing...")
 
-        # Process in thread to not block audio
-        threading.Thread(target=self._process_speech, daemon=True).start()
+        # Queue for persistent worker thread (CUDA context stays consistent)
+        self._speech_queue.put("process")
 
     # Known Whisper hallucination patterns (generated on silence/noise)
     _HALLUCINATION_PATTERNS = {
@@ -1477,6 +1486,29 @@ class VoiceAssistant:
             if len(pattern) > 5 and pattern in normalized:
                 return True
         return False
+
+    def _speech_worker_loop(self) -> None:
+        """Persistent worker thread for speech processing.
+
+        Keeps the CUDA context consistent across STT calls — NeMo's
+        Nemotron RNNT uses CUDA graph capture which must be replayed
+        on the same thread that captured it.
+        """
+        # Initialize CUDA context on this thread
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.set_device(0)
+        except Exception:
+            pass
+
+        while True:
+            try:
+                self._speech_queue.get()
+                self._process_speech()
+            except Exception:
+                logger.exception("Speech worker error")
+                self._set_state(AssistantState.IDLE)
 
     def _process_speech(self) -> None:
         """Process recorded speech: STT -> LLM -> TTS."""
