@@ -19,6 +19,9 @@ docker compose up -d                    # pulls ~12GB, vLLM loads model (~5 min)
 docker compose logs -f assistant        # watch it come up
 ```
 
+> **Note:** vLLM may restart once on first boot due to CUDA graph memory allocation.
+> This is normal — `restart: unless-stopped` handles it automatically. Wait ~5 minutes.
+
 Plug in a mic and speaker, and start talking:
 
 ```
@@ -43,6 +46,14 @@ With multi-camera (`--camera-config`):
 ```
 
 To stop: `docker compose down`
+
+To customize the config, mount a local `configs/` directory:
+```bash
+# Clone the repo (or just copy configs/)
+git clone https://github.com/amarrmb/jetson-assistant.git
+# Edit configs/thor-sota.yaml, then restart with the mount:
+docker compose down && docker compose up -d
+```
 
 ## Make It Yours
 
