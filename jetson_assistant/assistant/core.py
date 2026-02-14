@@ -309,10 +309,6 @@ class VoiceAssistant:
         # Language instruction appended to system prompt (set by set_language tool)
         self._language_instruction = ""
 
-    def _set_language_instruction(self, instruction: str) -> None:
-        """Set the language instruction (called by set_language builtin tool)."""
-        self._language_instruction = instruction
-
         # External tool plugin modules (loaded in _init_tools)
         self._external_tool_modules: list = []
 
@@ -341,6 +337,10 @@ class VoiceAssistant:
         self._audio_feed_thread: Optional[threading.Thread] = None
 
         logger.info("Voice assistant initialized")
+
+    def _set_language_instruction(self, instruction: str) -> None:
+        """Set the language instruction (called by set_language builtin tool)."""
+        self._language_instruction = instruction
 
     def _set_state(self, new_state: AssistantState) -> None:
         """Set assistant state and notify external tool plugins."""
