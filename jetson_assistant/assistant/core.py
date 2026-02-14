@@ -699,7 +699,7 @@ class VoiceAssistant:
             'User: "What cameras do I have?" → {"tool": "list_cameras", "args": {}}\n'
             'User: "How many cameras?" → {"tool": "list_cameras", "args": {}}\n'
             'User: "Check the garage" → {"tool": "check_camera", "args": {"camera_name": "garage"}}\n'
-            'User: "What do you see?" → Use a camera/vision tool (check_camera, reachy_see) to see.\n'
+            'User: "What do you see?" → {"tool": "check_camera", "args": {"camera_name": "local"}}\n'
             'User: "Search for latest AI news" → {"tool": "web_search", "args": {"query": "latest AI news"}}\n'
             'User: "What\'s the latest news on NVIDIA?" → {"tool": "web_search", "args": {"query": "NVIDIA latest news"}}\n'
             'User: "Tell me about Microsoft updates" → {"tool": "web_search", "args": {"query": "Microsoft latest updates"}}\n'
@@ -1837,7 +1837,6 @@ class VoiceAssistant:
                             )
                             if self._tools and looks_like_tool:
                                 buffer_mode = True
-                                logger.debug("Stream: buffer_mode=True (tool call)")
                             else:
                                 buffer_mode = False
                                 if self.config.verbose:
