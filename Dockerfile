@@ -61,7 +61,7 @@ RUN pip install --no-cache-dir --break-system-packages \
 # so we install assistant deps individually, skipping openwakeword.
 COPY . .
 RUN pip install --no-cache-dir --break-system-packages \
-    -e ".[kokoro,nemotron,vision]" \
+    -e ".[kokoro,nemotron,vision,search]" \
     sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0 openai>=1.0 \
     "setuptools<82"
 
