@@ -18,6 +18,10 @@
 
 FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
 
+LABEL org.opencontainers.image.source="https://github.com/amarrmb/jetson-assistant" \
+      org.opencontainers.image.description="On-device voice + vision AI for NVIDIA Jetson" \
+      org.opencontainers.image.license="Apache-2.0"
+
 ENV DEBIAN_FRONTEND=noninteractive \
     TORCH_COMPILE_DISABLE=1 \
     PYTHONUNBUFFERED=1 \
