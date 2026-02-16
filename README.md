@@ -19,6 +19,18 @@ docker compose up -d                    # pulls ~12GB, vLLM loads model (~5 min)
 docker compose logs -f assistant        # watch it come up
 ```
 
+> **Note:** vLLM may restart once on first boot due to CUDA graph memory allocation.
+> This is normal — `restart: unless-stopped` handles it automatically. Wait ~5 minutes.
+
+**Audio setup:** Set `ALSA_CARD` to your audio device name (find it with `aplay -l`):
+```bash
+# Example: use a USB speaker/mic
+ALSA_CARD=USB docker compose up -d
+
+# Or use a specific card name
+ALSA_CARD="Jabra" docker compose up -d
+```
+
 Plug in a mic and speaker, and start talking:
 
 ```
@@ -44,6 +56,14 @@ With multi-camera (`--camera-config`):
 
 To stop: `docker compose down`
 
+To customize the config, mount a local `configs/` directory:
+```bash
+# Clone the repo (or just copy configs/)
+git clone https://github.com/amarrmb/jetson-assistant.git
+# Edit configs/thor-sota.yaml, then restart with the mount:
+docker compose down && docker compose up -d
+```
+
 ## Make It Yours
 
 ### Options
@@ -63,6 +83,7 @@ Environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `ALSA_CARD` | (system default) | Audio device name from `aplay -l` (e.g. `USB`, `Jabra`) |
 | `JETSON_ASSISTANT_HOST` | `0.0.0.0` | Server bind address |
 | `JETSON_ASSISTANT_PORT` | `8080` | Server port |
 | `JETSON_ASSISTANT_MODEL_CACHE` | `~/.cache/jetson-assistant` | Model cache directory |
@@ -89,15 +110,25 @@ Or on Jetson with the setup script: `./scripts/install_jetson.sh`
 
 ### Build Docker
 
+The pre-built image (`ghcr.io/amarrmb/jetson-assistant:thor`) works out of the box. If you want to modify the code and rebuild:
+
 ```bash
 # On Jetson Thor (aarch64 only)
+
+# 1. Download the flash-attn wheel (127MB, not stored in git)
+gh release download v0.1.0 -p 'flash_attn-*.whl' -D wheels/
+
+# 2. Build
 docker build -t jetson-assistant:thor .
 ```
 
-Adapting for other hardware:
+The flash-attn wheel is pre-compiled for Jetson Thor (Python 3.12, CUDA 13.0, sm_110). See `wheels/README.md` for build-from-source instructions if you need a different target.
+
+**Adapting for other hardware:**
 1. Change the PyTorch index URL in `Dockerfile` for your CUDA version
 2. Rebuild flash-attn for your GPU arch (see `wheels/README.md`)
-3. Adjust `--gpu-memory-utilization` in `docker-compose.yml`
+3. Swap the vLLM image in `docker-compose.yml` for your platform
+4. Adjust `--gpu-memory-utilization` for your GPU memory
 
 ### Extend It
 

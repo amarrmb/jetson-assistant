@@ -161,3 +161,117 @@ class TestReportFormatting:
         assert "<html>" in report
         assert "<table>" in report
         assert "test" in report
+
+
+class TestPipelineMetrics:
+    """Test E2E pipeline benchmark metrics."""
+
+    def test_pipeline_benchmark_produces_metrics(self):
+        """Test PipelineMetrics creation and field access."""
+        from scripts.benchmark_pipeline import PipelineMetrics
+
+        m = PipelineMetrics(
+            ttfb_ms=450.0,
+            e2e_ms=700.0,
+            stt_ms=24.0,
+            llm_ttft_ms=200.0,
+            tts_ms=280.0,
+            vram_idle_mb=4096.0,
+            vram_peak_mb=6144.0,
+        )
+        assert m.ttfb_ms == 450.0
+        assert m.e2e_ms == 700.0
+        assert m.stt_ms == 24.0
+        assert m.llm_ttft_ms == 200.0
+        assert m.tts_ms == 280.0
+        assert m.vram_idle_mb == 4096.0
+        assert m.vram_peak_mb == 6144.0
+
+    def test_to_markdown_contains_all_metrics(self):
+        """Test that to_markdown produces a table with all metric names and values."""
+        from scripts.benchmark_pipeline import PipelineMetrics
+
+        m = PipelineMetrics(
+            ttfb_ms=450.0,
+            e2e_ms=700.0,
+            stt_ms=24.0,
+            llm_ttft_ms=200.0,
+            tts_ms=280.0,
+            vram_idle_mb=4096.0,
+            vram_peak_mb=6144.0,
+        )
+        table = m.to_markdown()
+
+        # Check table structure
+        assert "| Metric" in table
+        assert "|-----" in table
+
+        # Check all metric labels present
+        assert "TTFB" in table
+        assert "E2E Latency" in table
+        assert "STT" in table
+        assert "LLM TTFT" in table
+        assert "TTS" in table
+        assert "VRAM Idle" in table
+        assert "VRAM Peak" in table
+
+        # Check values present
+        assert "450" in table
+        assert "700" in table
+        assert "24" in table
+        assert "200" in table
+        assert "280" in table
+        assert "4096" in table
+        assert "6144" in table
+
+    def test_to_json_returns_dict(self):
+        """Test that to_json returns a dict with all fields."""
+        from scripts.benchmark_pipeline import PipelineMetrics
+
+        m = PipelineMetrics(
+            ttfb_ms=450.0,
+            e2e_ms=700.0,
+            stt_ms=24.0,
+            llm_ttft_ms=200.0,
+            tts_ms=280.0,
+            vram_idle_mb=4096.0,
+            vram_peak_mb=6144.0,
+        )
+        d = m.to_json()
+
+        assert isinstance(d, dict)
+        assert d["ttfb_ms"] == 450.0
+        assert d["e2e_ms"] == 700.0
+        assert d["stt_ms"] == 24.0
+        assert d["llm_ttft_ms"] == 200.0
+        assert d["tts_ms"] == 280.0
+        assert d["vram_idle_mb"] == 4096.0
+        assert d["vram_peak_mb"] == 6144.0
+        assert len(d) == 7
+
+    def test_to_json_roundtrip(self):
+        """Test that to_json output can be serialized to JSON."""
+        import json as json_mod
+        from scripts.benchmark_pipeline import PipelineMetrics
+
+        m = PipelineMetrics(
+            ttfb_ms=123.4,
+            e2e_ms=567.8,
+            stt_ms=10.0,
+            llm_ttft_ms=100.0,
+            tts_ms=200.0,
+            vram_idle_mb=2048.0,
+            vram_peak_mb=3072.0,
+        )
+        serialized = json_mod.dumps(m.to_json())
+        deserialized = json_mod.loads(serialized)
+        assert deserialized["ttfb_ms"] == 123.4
+        assert deserialized["vram_peak_mb"] == 3072.0
+
+    def test_default_test_phrases(self):
+        """Test that benchmark_pipeline has sensible default test phrases."""
+        from scripts.benchmark_pipeline import DEFAULT_TEST_PHRASES
+
+        assert len(DEFAULT_TEST_PHRASES) == 5
+        assert "What time is it?" in DEFAULT_TEST_PHRASES
+        assert "Tell me a joke." in DEFAULT_TEST_PHRASES

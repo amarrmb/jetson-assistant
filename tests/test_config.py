@@ -1,12 +1,14 @@
-"""Tests for config loading, merge logic, and RTSP sanitization."""
+"""Tests for config loading, merge logic, RTSP sanitization, and --auto flag."""
 
 import re
 from dataclasses import fields
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from jetson_assistant.assistant.core import AssistantConfig
+from jetson_assistant.cli import _resolve_config
 
 # ---------------------------------------------------------------------------
 # Helpers — mirrors the logic in cli.py and core.py
@@ -142,3 +144,55 @@ class TestResolveLogic:
             _resolve("voice", cli_overrides, yaml_config, cli_locals, config_name="tts_voice")
             == "af_heart"
         )
+
+
+# ---------------------------------------------------------------------------
+# _resolve_config() — --auto flag config resolution
+# ---------------------------------------------------------------------------
+
+
+class TestResolveConfig:
+    """Test the _resolve_config() helper used by the --auto flag."""
+
+    def test_explicit_config_wins(self):
+        """When config is provided, it is returned directly regardless of auto."""
+        assert _resolve_config(auto=False, config="configs/custom.yaml") == "configs/custom.yaml"
+        assert _resolve_config(auto=True, config="configs/custom.yaml") == "configs/custom.yaml"
+
+    def test_default_returns_thor(self):
+        """When neither auto nor config, returns the default (configs/thor.yaml)."""
+        assert _resolve_config(auto=False, config=None) == "configs/thor.yaml"
+
+    def test_auto_flag_selects_tier_config(self):
+        """--auto detects hardware and returns the tier-specific config path."""
+        from jetson_assistant.hardware import JetsonTier
+
+        with patch("jetson_assistant.hardware.detect_tier", return_value=JetsonTier.ORIN):
+            with patch("jetson_assistant.hardware.get_vram_gb", return_value=64.0):
+                config_path = _resolve_config(auto=True, config=None)
+                assert config_path.endswith("orin.yaml")
+                assert config_path == "configs/orin.yaml"
+
+    def test_auto_flag_detects_thor(self):
+        """--auto with high VRAM returns THOR config."""
+        from jetson_assistant.hardware import JetsonTier
+
+        with patch("jetson_assistant.hardware.detect_tier", return_value=JetsonTier.THOR):
+            config_path = _resolve_config(auto=True, config=None)
+            assert config_path == "configs/thor.yaml"
+
+    def test_auto_flag_detects_nano(self):
+        """--auto with low VRAM returns NANO config."""
+        from jetson_assistant.hardware import JetsonTier
+
+        with patch("jetson_assistant.hardware.detect_tier", return_value=JetsonTier.NANO):
+            config_path = _resolve_config(auto=True, config=None)
+            assert config_path == "configs/nano.yaml"
+
+    def test_explicit_config_overrides_auto(self):
+        """Explicit --config takes priority over --auto even when auto is True."""
+        from jetson_assistant.hardware import JetsonTier
+
+        with patch("jetson_assistant.hardware.detect_tier", return_value=JetsonTier.ORIN):
+            config_path = _resolve_config(auto=True, config="configs/thor-sota.yaml")
+            assert config_path == "configs/thor-sota.yaml"

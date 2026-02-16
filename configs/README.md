@@ -2,26 +2,39 @@
 
 Pre-built configurations for different hardware tiers and pipeline variants.
 
-## Choosing a Config
+## Tier Configs (auto-detected)
+
+These are selected automatically by `--auto` based on detected VRAM:
+
+| Config | Hardware | VRAM | Pipeline | Target E2E |
+|--------|----------|------|----------|------------|
+| `thor.yaml` | Jetson Thor | 128GB | NVFP4 7B VLM + Kokoro + Nemotron | <700ms |
+| `orin.yaml` | AGX Orin | 32-64GB | 3B VLM + Kokoro + Nemotron | <1s |
+| `nano.yaml` | Orin Nano | 8GB | Ollama 1.5B + Piper + Whisper tiny | <1.5s |
+
+## Variant Configs (manual selection)
 
 | Config | Hardware | Pipeline | Latency | Notes |
 |--------|----------|----------|---------|-------|
-| `thor-sota.yaml` | Jetson Thor | NVFP4 7B + Kokoro + Nemotron | ~700ms | Fastest, best quality |
+| `thor-sota.yaml` | Jetson Thor | NVFP4 7B + Kokoro + Nemotron | ~700ms | Same as `thor.yaml` |
 | `thor-gpu.yaml` | Jetson Thor | NVFP4 7B + Piper + vLLM Whisper | ~890ms | All GPU, no in-process models |
-| `orin-agx.yaml` | AGX Orin 64GB | BF16 7B + Kokoro + Nemotron | ~2-3s | Uses generic Jetson container |
+| `orin-agx.yaml` | AGX Orin 64GB | BF16 7B + Kokoro + Nemotron | ~2-3s | 7B model (needs 64GB) |
 | `desktop.yaml` | x86 + NVIDIA GPU | Ollama + Piper + Whisper CPU | varies | Development/testing |
 
 ## Usage
 
 ```bash
-# Use a preset
-jetson-assistant assistant --config configs/thor-sota.yaml
+# Auto-detect hardware and use the right config
+jetson-assistant assistant --auto
+
+# Use a specific preset
+jetson-assistant assistant --config configs/thor.yaml
 
 # Override specific values from the preset
-jetson-assistant assistant --config configs/thor-sota.yaml --voice am_adam
+jetson-assistant assistant --config configs/thor.yaml --voice am_adam
 
 # Multiple overrides
-jetson-assistant assistant --config configs/thor-sota.yaml --voice am_adam --no-stream
+jetson-assistant assistant --config configs/thor.yaml --voice am_adam --no-stream
 ```
 
 ## How It Works
