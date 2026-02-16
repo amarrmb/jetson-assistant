@@ -10,9 +10,11 @@ This is the heart of the assistant that ties together:
 
 import base64
 import logging
+import queue
 import re
 import time
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 from dataclasses import dataclass, field, fields
@@ -30,6 +32,7 @@ from jetson_assistant.assistant.audio_io import (
     VoiceActivityDetector,
 )
 from jetson_assistant.assistant.llm import LLMBackend, create_llm
+from jetson_assistant.assistant.tts_cache import TTSCache
 from jetson_assistant.assistant.wakeword import WakeWordDetector, create_wakeword_detector
 
 
@@ -221,6 +224,11 @@ class VoiceAssistant:
         '"what is AI" → CHAT'
     )
 
+    # ── Slow Tool Acknowledgment ──
+    # Tools expected to take >200ms get a spoken "Let me check on that."
+    # before execution, so the user knows the assistant is working.
+    _SLOW_TOOLS = frozenset({"web_search", "look", "search", "describe_scene"})
+
     _VISUAL_PATTERNS = re.compile(
         r"\b(see|look|show|describe|camera|picture|image|photo|color|holding|wearing|read)\b"
         r"|\bwhat(?:'s|\s+is)\s+(this|that|here|there)\b"
@@ -250,6 +258,82 @@ class VoiceAssistant:
 
         # Fallback: treat as TOOL if it looks like a command
         return "TOOL"
+
+    def _capture_vision_async(self) -> Future:
+        """Submit camera capture to background thread, returns a Future.
+
+        The capture runs concurrently so the main thread can build LLM
+        context (trim history, classify intent, etc.) in parallel with
+        the ~50-100 ms camera grab.
+        """
+
+        def _grab():
+            with self._camera_lock:
+                if self.camera and self.camera.is_open:
+                    return self.camera.capture_base64()
+            return None
+
+        return self._vision_executor.submit(_grab)
+
+    # ── VLM Priority Queue ──
+    # User requests preempt background watch threads on the shared vLLM instance.
+
+    def _request_vlm_priority(self):
+        """Signal that a user request needs VLM access."""
+        self._vlm_priority.set()
+
+    def _release_vlm_priority(self):
+        """Clear priority flag after user request completes."""
+        self._vlm_priority.clear()
+
+    def _vlm_call_with_priority(self, call_fn, is_user_request=False):
+        """Make a VLM call with priority handling.
+
+        Args:
+            call_fn: Callable that performs the actual VLM call and returns result.
+            is_user_request: If True, set priority (preempts watch threads).
+                If False (watch thread), skip if user has priority.
+
+        Returns:
+            Result of call_fn, or None if skipped (watch thread yielding).
+        """
+        if not is_user_request:
+            # Watch thread: yield if user has priority
+            if self._vlm_priority.is_set():
+                logger.debug("VLM priority: watch thread yielding to user request")
+                return None
+
+        if is_user_request:
+            self._request_vlm_priority()
+
+        with self._vlm_lock:
+            try:
+                return call_fn()
+            finally:
+                if is_user_request:
+                    self._release_vlm_priority()
+
+    def _make_priority_aware_check_fn(self, check_fn):
+        """Wrap a VLM check function with priority awareness.
+
+        Returns a function with the same signature as check_fn
+        (prompt, image_b64) -> bool, but that skips the call (returns False)
+        when a user request has VLM priority.
+
+        Used when passing check_fn to VisionMonitor and MultiWatchMonitor
+        so their background threads automatically yield to user requests.
+        """
+
+        def _priority_check(prompt: str, image_b64: str) -> bool:
+            result = self._vlm_call_with_priority(
+                lambda: check_fn(prompt, image_b64),
+                is_user_request=False,
+            )
+            if result is None:
+                return False  # Skipped — report as "not detected"
+            return result
+
+        return _priority_check
 
     def __init__(
         self,
@@ -285,6 +369,19 @@ class VoiceAssistant:
 
         # Camera lock for thread-safe access (shared between processing and monitor)
         self._camera_lock = threading.Lock()
+
+        # VLM priority queue — user requests preempt background watch threads.
+        # Both the watch thread (scene description) and user tool calls use the
+        # same vLLM instance. The lock serializes access; the priority event
+        # signals that a user request is pending so watch threads should yield.
+        self._vlm_lock = threading.Lock()
+        self._vlm_priority = threading.Event()
+
+        # Vision capture executor — runs camera grab concurrently with context building
+        self._vision_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision")
+
+        # Tool execution executor — runs multiple tool calls concurrently
+        self._tool_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tool")
 
         # Multi-camera pool (USB + RTSP cameras from config file)
         self._camera_pool = None
@@ -331,10 +428,33 @@ class VoiceAssistant:
         # Echo suppression: grace period after speech ends to avoid
         # picking up speaker echo as a new utterance
         self._speech_end_time = 0.0  # monotonic time when SPEAKING ended
-        self._echo_grace_s = 0.5  # seconds to suppress after speech ends
+        self._echo_grace_s = 1.5  # seconds to suppress after speech ends (USB mic/speaker need longer)
+
+        # TTS audio cache — avoids re-synthesizing repeated short phrases
+        self._tts_cache = TTSCache(max_entries=64, max_text_len=80)
+
+        # Streaming TTS overlap: background thread synthesizes + plays queued
+        # sentences so the LLM stream can keep generating while TTS is busy.
+        self._tts_queue: queue.Queue = queue.Queue(maxsize=4)
+        self._tts_thread = threading.Thread(
+            target=self._tts_worker, daemon=True, name="tts-worker"
+        )
+        self._tts_thread.start()
 
         # Audio-reactive motion: background thread feeding chunks during playback
         self._audio_feed_thread: Optional[threading.Thread] = None
+
+        # Persistent speech processing thread (keeps CUDA context consistent
+        # for NeMo Nemotron STT which uses CUDA graph capture)
+        self._speech_queue: queue.Queue = queue.Queue()
+        self._speech_worker = threading.Thread(
+            target=self._speech_worker_loop, daemon=True
+        )
+        self._speech_worker.start()
+
+        # Enable debug logging when verbose so timing info actually appears
+        if self.config.verbose:
+            logger.setLevel(logging.DEBUG)
 
         logger.info("Voice assistant initialized")
 
@@ -527,7 +647,7 @@ class VoiceAssistant:
         self._vision_monitor = VisionMonitor(
             camera=self.camera,
             camera_lock=self._camera_lock,
-            check_fn=self.llm.check_condition,
+            check_fn=self._make_priority_aware_check_fn(self.llm.check_condition),
             on_detected=self._on_watch_detected,
             can_speak_fn=lambda: self.state == AssistantState.IDLE,
             poll_interval=self.config.watch_poll_interval,
@@ -585,7 +705,7 @@ class VoiceAssistant:
 
             self._multi_watch = MultiWatchMonitor(
                 camera_pool=self._camera_pool,
-                check_fn=self.llm.check_condition,
+                check_fn=self._make_priority_aware_check_fn(self.llm.check_condition),
                 on_detected=self._on_multi_watch_detected,
                 can_speak_fn=lambda: self.state == AssistantState.IDLE,
                 poll_interval=self.config.watch_poll_interval,
@@ -690,7 +810,7 @@ class VoiceAssistant:
             'User: "What cameras do I have?" → {"tool": "list_cameras", "args": {}}\n'
             'User: "How many cameras?" → {"tool": "list_cameras", "args": {}}\n'
             'User: "Check the garage" → {"tool": "check_camera", "args": {"camera_name": "garage"}}\n'
-            'User: "What do you see?" → Use a camera/vision tool (check_camera, reachy_see) to see.\n'
+            'User: "What do you see?" → {"tool": "check_camera", "args": {"camera_name": "local"}}\n'
             'User: "Search for latest AI news" → {"tool": "web_search", "args": {"query": "latest AI news"}}\n'
             'User: "What\'s the latest news on NVIDIA?" → {"tool": "web_search", "args": {"query": "NVIDIA latest news"}}\n'
             'User: "Tell me about Microsoft updates" → {"tool": "web_search", "args": {"query": "Microsoft latest updates"}}\n'
@@ -846,6 +966,52 @@ class VoiceAssistant:
                 return raw_result
         return raw_result
 
+    def _is_slow_tool(self, tool_name: str) -> bool:
+        """Check if a tool is expected to take >200ms."""
+        return tool_name in self._SLOW_TOOLS
+
+    def _maybe_acknowledge_slow_tools(self, tool_calls: list[dict]) -> None:
+        """Speak brief acknowledgment if any tool in the list is slow."""
+        if any(self._is_slow_tool(tc["name"]) for tc in tool_calls):
+            self._speak_sentences("Let me check on that.")
+
+    def _execute_tools_parallel(self, tool_calls: list[dict]) -> list[str]:
+        """Execute tool calls concurrently. Single tool runs inline (no executor overhead).
+
+        Each dict must have 'name' and 'arguments' keys.
+        Returns list of result strings in same order as input.
+        Exceptions are caught per-tool and returned as error strings.
+        """
+        from concurrent.futures import as_completed
+        from jetson_assistant.assistant.llm import ToolCallResult
+
+        def _run_one(tc_dict: dict) -> str:
+            """Execute a single tool call dict, return result string."""
+            obj = ToolCallResult(name=tc_dict["name"], arguments=tc_dict.get("arguments", {}))
+            result = self._tools.execute(obj)
+            return result if result is not None else f"Tool '{tc_dict['name']}' returned None."
+
+        if len(tool_calls) == 1:
+            try:
+                return [_run_one(tool_calls[0])]
+            except Exception as e:
+                return [f"Error: {e}"]
+
+        # Multiple tools — run in parallel via ThreadPoolExecutor
+        futures = {}
+        for i, tc in enumerate(tool_calls):
+            fut = self._tool_executor.submit(_run_one, tc)
+            futures[fut] = i
+
+        results: list[str | None] = [None] * len(tool_calls)
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            try:
+                results[idx] = fut.result(timeout=30)
+            except Exception as e:
+                results[idx] = f"Error: {e}"
+        return results
+
     def _try_parse_tool_call(self, text: str) -> Optional[str]:
         """Try to parse prompt-based tool call(s) from the model's text output.
 
@@ -862,6 +1028,23 @@ class VoiceAssistant:
             text = text.strip("`").strip()
             if text.startswith("json"):
                 text = text[4:].strip()
+
+        # Handle malformed tool calls: 'tool_name {"arg": ...}' → proper JSON
+        # Small LLMs sometimes emit 'reachy_see {"question": "..."}' instead of
+        # '{"tool": "reachy_see", "args": {"question": "..."}}'
+        if self._tools and not text.startswith("{"):
+            import re
+            m = re.match(r'^(\w+)\s*(\{.+)', text, re.DOTALL)
+            if m:
+                tool_name_prefix = m.group(1)
+                registered = {d["function"]["name"] for d in self._tools.definitions()}
+                if tool_name_prefix in registered:
+                    try:
+                        args_obj = json.loads(m.group(2))
+                        text = json.dumps({"tool": tool_name_prefix, "args": args_obj})
+                        logger.debug("Reformatted malformed tool call: %s", text[:120])
+                    except json.JSONDecodeError:
+                        pass
 
         # Find all JSON objects in the text by matching balanced braces
         tool_calls = []
@@ -905,19 +1088,87 @@ class VoiceAssistant:
                 unique_calls.append((tool_name, args))
         tool_calls = unique_calls
 
-        # Execute each tool call sequentially
-        from jetson_assistant.assistant.llm import ToolCallResult
-        results = []
+        # Resolve fuzzy tool names before execution
+        registered = {d["function"]["name"] for d in self._tools.definitions()}
+        resolved_calls = []
         for tool_name, args in tool_calls:
+            # Fuzzy-match hallucinated tool names from small LLMs
+            if tool_name not in registered:
+                resolved = self._fuzzy_resolve_tool(tool_name, registered, args)
+                if resolved:
+                    logger.info("Fuzzy tool resolve: '%s' → '%s'", tool_name, resolved)
+                    tool_name = resolved
+                else:
+                    logger.warning("Unknown tool '%s', no fuzzy match", tool_name)
             logger.debug("Tool: %s(%s)", tool_name, args)
-            tc = ToolCallResult(name=tool_name, arguments=args)
-            result = self._tools.execute(tc)
-            if result is not None:
-                results.append(result)
-            else:
-                results.append(f"Tool '{tool_name}' not found.")
+            resolved_calls.append({"name": tool_name, "arguments": args})
+
+        # Acknowledge slow tools before executing
+        self._maybe_acknowledge_slow_tools(resolved_calls)
+
+        # Execute tools — single tool inline, multiple tools in parallel
+        results = self._execute_tools_parallel(resolved_calls)
 
         return " ".join(results) if results else "Got it."
+
+    @staticmethod
+    def _fuzzy_resolve_tool(
+        hallucinated: str, registered: set[str], args: dict
+    ) -> str | None:
+        """Resolve a hallucinated tool name to the closest registered tool.
+
+        Small LLMs (7B) frequently hallucinate tool names like
+        'camera_candy_monitor' instead of 'watch_camera'. This uses
+        keyword overlap + argument hints to find the right tool.
+        """
+        h = hallucinated.lower().replace("-", "_")
+        h_parts = set(h.split("_"))
+
+        # Keyword → tool mapping for common hallucinations
+        keyword_map = {
+            "watch": "watch_camera",
+            "monitor": "watch_camera",
+            "watching": "watch_camera",
+            "surveillance": "watch_camera",
+            "alert": "watch_camera",
+            "stop_watch": "stop_watching_camera",
+            "stop_monitor": "stop_watching_camera",
+            "camera_check": "check_camera",
+            "look_camera": "check_camera",
+            "see_camera": "check_camera",
+            "search": "web_search",
+            "timer": "set_timer",
+            "language": "set_language",
+            "time": "get_time",
+        }
+
+        # Try keyword match first
+        for keyword, tool in keyword_map.items():
+            if tool in registered and keyword in h:
+                return tool
+
+        # Try argument-based hints
+        if "condition" in args and "watch_camera" in registered:
+            return "watch_camera"
+        if "camera_name" in args:
+            if "watch" in h_parts or "monitor" in h_parts:
+                if "watch_camera" in registered:
+                    return "watch_camera"
+            if "check_camera" in registered:
+                return "check_camera"
+
+        # Try word overlap scoring
+        best, best_score = None, 0
+        for tool in registered:
+            t_parts = set(tool.split("_"))
+            overlap = len(h_parts & t_parts)
+            if overlap > best_score:
+                best_score = overlap
+                best = tool
+        if best_score >= 1:
+            return best
+
+        return None
 
     def _on_watch_detected(self, condition, frame_b64: str) -> None:
         """Callback when the vision monitor detects the watched condition."""
@@ -934,6 +1185,16 @@ class VoiceAssistant:
         self, camera_name: str, condition, frame_b64
     ) -> None:
         """Callback when the multi-watch monitor detects a condition on a camera."""
+        import time as _time
+
+        # Wait up to 10s for assistant to not be speaking/processing before announcing
+        # IDLE = wake-word mode, LISTENING = always-listen mode — both are "available"
+        for _ in range(20):
+            if self.state not in (AssistantState.SPEAKING, AssistantState.PROCESSING):
+                break
+            logger.debug("Watch alert waiting (state=%s)", self.state.value)
+            _time.sleep(0.5)
+
         msg = f"Alert: {condition.description} detected on {camera_name}!"
         logger.info("MultiWatch: %s", msg)
         self._update_preview(state="SPEAKING", watch_text=f"{camera_name}: detected!")
@@ -1048,7 +1309,10 @@ class VoiceAssistant:
             description = ""
             if self.llm is not None:
                 try:
-                    response = self.llm.generate(question, images=[frame_b64])
+                    response = self._vlm_call_with_priority(
+                        lambda: self.llm.generate(question, images=[frame_b64]),
+                        is_user_request=True,
+                    )
                     description = response.text.strip()
                 except Exception as e:
                     description = f"Vision analysis failed: {e}"
@@ -1142,7 +1406,10 @@ class VoiceAssistant:
 
             conversation = self._get_conversation(session_id)
             context = conversation[-self.config.conversation_history * 2:]
-            response = self.llm.generate(query_text, context=context, images=images)
+            response = self._vlm_call_with_priority(
+                lambda: self.llm.generate(query_text, context=context, images=images),
+                is_user_request=True,
+            )
             response_text = response.text.strip()
 
             # Tool call detection (reuse existing parser)
@@ -1350,16 +1617,9 @@ class VoiceAssistant:
         Implements the state machine.
         """
         if self.state == AssistantState.SPEAKING:
-            # Barge-in detection: if user speaks loudly over the assistant,
-            # interrupt playback. Threshold is high to avoid picking up the
-            # assistant's own voice from the speaker (echo).
-            rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2)))
-            if rms > 2000:  # Well above typical speaker echo (~500-1000)
-                self._bargein_event.set()
-                # Kill current aplay process immediately
-                proc = self._aplay_proc
-                if proc is not None and proc.poll() is None:
-                    proc.terminate()
+            # Suppress all mic processing during playback.
+            # Without hardware AEC, the speaker echo easily exceeds any
+            # reasonable barge-in threshold and kills aplay mid-sentence.
             return
 
         elif self.state == AssistantState.IDLE:
@@ -1437,8 +1697,8 @@ class VoiceAssistant:
         if self.config.verbose:
             logger.debug("Processing...")
 
-        # Process in thread to not block audio
-        threading.Thread(target=self._process_speech, daemon=True).start()
+        # Queue for persistent worker thread (CUDA context stays consistent)
+        self._speech_queue.put("process")
 
     # Known Whisper hallucination patterns (generated on silence/noise)
     _HALLUCINATION_PATTERNS = {
@@ -1477,6 +1737,29 @@ class VoiceAssistant:
             if len(pattern) > 5 and pattern in normalized:
                 return True
         return False
+
+    def _speech_worker_loop(self) -> None:
+        """Persistent worker thread for speech processing.
+
+        Keeps the CUDA context consistent across STT calls — NeMo's
+        Nemotron RNNT uses CUDA graph capture which must be replayed
+        on the same thread that captured it.
+        """
+        # Initialize CUDA context on this thread
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.set_device(0)
+        except Exception:
+            pass
+
+        while True:
+            try:
+                self._speech_queue.get()
+                self._process_speech()
+            except Exception:
+                logger.exception("Speech worker error")
+                self._set_state(AssistantState.IDLE)
 
     def _process_speech(self) -> None:
         """Process recorded speech: STT -> LLM -> TTS."""
@@ -1529,9 +1812,13 @@ class VoiceAssistant:
 
             logger.info("You: %s", user_text)
             self._update_preview(state="PROCESSING", user_text=user_text)
+            if self._vision_preview is not None:
+                self._vision_preview.add_transcript("user", user_text)
 
             if self.config.verbose:
                 logger.debug("STT: %.0fms", stt_time * 1000)
+            if self._vision_preview is not None:
+                self._vision_preview.add_timing("stt", stt_time * 1000)
 
             # Callback
             if self.config.on_listen_end:
@@ -1543,6 +1830,8 @@ class VoiceAssistant:
                 self._set_state(AssistantState.SPEAKING)
                 self.say(watch_response)
                 logger.info("Assistant: %s", watch_response)
+                if self._vision_preview is not None:
+                    self._vision_preview.add_transcript("assistant", watch_response)
                 self._get_conversation("local").append({"role": "user", "content": user_text})
                 self._get_conversation("local").append({"role": "assistant", "content": watch_response})
                 self._set_state(AssistantState.IDLE)
@@ -1554,6 +1843,8 @@ class VoiceAssistant:
                 self._set_state(AssistantState.SPEAKING)
                 self._speak_sentences(news_response)
                 logger.info("Assistant: %s", news_response)
+                if self._vision_preview is not None:
+                    self._vision_preview.add_transcript("assistant", news_response)
                 self._get_conversation("local").append({"role": "user", "content": user_text})
                 self._get_conversation("local").append({"role": "assistant", "content": news_response})
                 self._set_state(AssistantState.IDLE)
@@ -1567,6 +1858,19 @@ class VoiceAssistant:
             # Pipelined LLM + TTS: Stream LLM and synthesize sentences as they complete
             self._set_state(AssistantState.SPEAKING)
 
+            # Start vision capture speculatively in background thread.
+            # The camera grab takes ~50-100ms; by running it concurrently
+            # with context building and intent classification, we save
+            # that time from the critical path.
+            vision_future = None
+            if (
+                self.camera is not None
+                and self.camera.is_open
+                and self.config.vision_enabled
+                and self._has_visual_intent(user_text)
+            ):
+                vision_future = self._capture_vision_async()
+
             context = self._get_conversation("local")[-self.config.conversation_history * 2 :]
 
             # Intent router: fast LLM classification (~90ms) decides whether
@@ -1579,15 +1883,18 @@ class VoiceAssistant:
                 router_ms = (time.perf_counter() - time.perf_counter()) if intent == "CHAT" else 0
                 logger.debug("Router: %s", intent)
 
-            if intent == "CHAT" and self.camera is not None and self.camera.is_open:
-                # Chat with no tools — check if user wants vision (legacy path)
-                if not (self._tools and self._tools.definitions()) and self._has_visual_intent(user_text):
-                    with self._camera_lock:
-                        frame_b64 = self.camera.capture_base64()
+            # Collect the vision future — only use the frame for legacy
+            # CHAT path (no tools). The capture already ran concurrently.
+            if vision_future is not None:
+                if intent == "CHAT" and not (self._tools and self._tools.definitions()):
+                    frame_b64 = vision_future.result(timeout=2.0)
                     if frame_b64:
                         images = [frame_b64]
                         if self.config.verbose:
-                            logger.debug("Vision: frame captured")
+                            logger.debug("Vision: frame captured (async)")
+                else:
+                    # Intent resolved to TOOL or tools are loaded — discard
+                    vision_future.cancel()
 
             full_response = []
             sentence_count = 0
@@ -1625,23 +1932,19 @@ class VoiceAssistant:
                                 if self.config.verbose:
                                     logger.debug("LLM first sentence: %.0fms", first_sentence_time * 1000)
 
-                            # Synthesize and play immediately
-                            tts_result = self.engine.synthesize(
+                            # Enqueue for background TTS worker (overlaps with
+                            # LLM generating the next sentence)
+                            self._tts_queue.put((
                                 sentence,
-                                voice=self.config.tts_voice,
-                                language=self.config.tts_language,
-                            )
-
-                            if first_audio_time is None:
-                                first_audio_time = time.perf_counter() - llm_start
-                                if self.config.verbose:
-                                    logger.debug("First audio ready: %.0fms", first_audio_time * 1000)
-
-                            self.audio_output.play_blocking(tts_result.audio, tts_result.sample_rate)
+                                self.config.tts_voice,
+                                self.config.tts_language,
+                            ))
 
                     except Exception as e:
                         logger.error("Server stream error: %s", e)
 
+                    # Wait for the TTS worker to finish all queued sentences
+                    self._tts_queue.join()
                     response_text = " ".join(full_response) if full_response else "(no response)"
                 else:
                     # Non-streaming server call
@@ -1699,72 +2002,110 @@ class VoiceAssistant:
 
                         # Decide mode on first sentence
                         if buffer_mode is None:
-                            if self._tools and sentence.strip().startswith("{"):
+                            stripped_s = sentence.strip()
+                            # Detect tool calls: '{"tool":...}' or 'tool_name {"arg":...}'
+                            looks_like_tool = (
+                                stripped_s.startswith("{")
+                                or ("{" in stripped_s and self._tools and any(
+                                    stripped_s.startswith(d["function"]["name"])
+                                    for d in self._tools.definitions()
+                                ))
+                            )
+                            if self._tools and looks_like_tool:
                                 buffer_mode = True
                             else:
                                 buffer_mode = False
                                 if self.config.verbose:
                                     llm_time = time.perf_counter() - llm_start
                                     logger.debug("LLM: %.0fms", llm_time * 1000)
+                                if self._vision_preview is not None:
+                                    self._vision_preview.add_timing("llm", (time.perf_counter() - llm_start) * 1000)
 
                         if buffer_mode:
                             # Accumulate — will parse as tool call after stream ends
                             continue
 
-                        # Speak mode — synthesize + play with barge-in check
+                        # Speak mode — enqueue for background TTS worker
+                        # (overlaps synthesis+playback with LLM generation)
                         if self._bargein_event.is_set():
                             break
-                        tts_result = self.engine.synthesize(
+
+                        if sentence_count == 1 and self.config.verbose:
+                            if self._vision_preview is not None:
+                                self._vision_preview.add_timing("tts", 0)  # TTS starts immediately via queue
+
+                        self._tts_queue.put((
                             sentence,
-                            voice=self.config.tts_voice,
-                            language=self.config.tts_language,
-                        )
-                        if first_audio_time is None:
-                            first_audio_time = time.perf_counter() - llm_start
-                            if self.config.verbose:
-                                logger.debug("First audio: %.0fms", first_audio_time * 1000)
-                        self.audio_output.play_blocking(tts_result.audio, tts_result.sample_rate)
+                            self.config.tts_voice,
+                            self.config.tts_language,
+                        ))
 
                 except Exception as e:
                     logger.error("Stream error: %s", e)
+
+                # Wait for the TTS worker to finish all queued sentences
+                if buffer_mode is False:
+                    self._tts_queue.join()
 
                 response_text = " ".join(full_response) if full_response else ""
 
                 # Tool call detection — only when we buffered (or empty response)
                 if buffer_mode is True and self._tools and response_text.strip():
                     stripped = response_text.strip()
-                    self._speak_quick("Let me check on that.")
+                    logger.debug("Tool buffer: %s", stripped[:200])
 
+                    t_exec = time.perf_counter()
                     tool_result = self._try_parse_tool_call(stripped)
+                    if self.config.verbose:
+                        logger.debug("  Tool exec: %.0fms", (time.perf_counter() - t_exec) * 1000)
+                    logger.debug("Tool result: %s", tool_result)
                     if tool_result is not None:
                         had_tool_calls = True
                         tool_call_json = stripped  # Preserve for conversation history
                         tool_results.append(tool_result)
                         response_text = ""
 
-                # If model called tools, summarize results via LLM for natural speech
+                # If model called tools, decide whether to speak the result
                 if had_tool_calls:
-                    raw_result = " ".join(tool_results) if tool_results else "Got it."
+                    raw_result = " ".join(tool_results) if tool_results else ""
 
-                    if len(raw_result) > 120 and self.llm is not None:
+                    # Detect robot action confirmations that shouldn't be spoken
+                    # (user can see/hear the robot). These are short phrases like
+                    # "Looking left.", "Expressing happy.", "Antennas set to ...",
+                    # "Dancing: wiggle!", "Nodding yes."
+                    _action_words = ("Looking ", "Expressing ", "Antennas ", "Dancing",
+                                     "Nodding ", "Shaking ", "Powering ", "Reachy is ")
+                    is_action = raw_result.startswith(_action_words) and len(raw_result) < 60
+
+                    if not raw_result or is_action:
+                        response_text = ""
+                    elif len(raw_result) > 80 and hasattr(self.llm, '_client'):
+                        # Summarize long results (search snippets, etc.)
+                        t_sum = time.perf_counter()
                         try:
-                            summary_prompt = (
-                                f"The user asked: \"{user_text}\"\n"
-                                f"Tool result: {raw_result[:600]}\n\n"
-                                "Summarize this in 1-2 natural spoken sentences. "
-                                "No markdown, no formatting."
+                            resp = self.llm._client.chat.completions.create(
+                                model=self.llm.model,
+                                messages=[{"role": "user", "content":
+                                    f"Q: {user_text}\nFacts: {raw_result[:500]}\nAnswer the question in 2 short sentences using ONLY facts above. Be specific and relevant:"}],
+                                max_tokens=80,
+                                temperature=0,
                             )
-                            summary = self.llm.generate(summary_prompt)
-                            response_text = summary.text.strip()
+                            response_text = resp.choices[0].message.content.strip()
                         except Exception:
                             response_text = raw_result
+                        if self.config.verbose:
+                            logger.debug("  Summary: %.0fms", (time.perf_counter() - t_sum) * 1000)
                     else:
+                        # Informational result (vision, timer, etc.) — speak directly
                         response_text = raw_result
 
                     llm_time = time.perf_counter() - llm_start
                     if self.config.verbose:
                         logger.debug("LLM+Tool: %.0fms", llm_time * 1000)
-                    self._speak_sentences(response_text)
+                    if self._vision_preview is not None:
+                        self._vision_preview.add_timing("llm", llm_time * 1000)
+                    if response_text:
+                        self._speak_sentences(response_text)
                 elif not response_text:
                     response_text = "(no response)"
             else:
@@ -1803,6 +2144,8 @@ class VoiceAssistant:
 
             logger.info("Assistant: %s", response_text)
             self._update_preview(state="SPEAKING", vlm_text=response_text)
+            if self._vision_preview is not None:
+                self._vision_preview.add_transcript("assistant", response_text)
 
             # Update conversation history — when tools were called, store the
             # JSON tool call (not the result text) so the LLM sees the correct
@@ -1852,6 +2195,55 @@ class VoiceAssistant:
         except Exception:
             pass  # Don't let acknowledgment failures block the actual work
 
+    def _tts_worker(self):
+        """Background thread: synthesize and play queued sentences.
+
+        Pulls (sentence, voice, lang) tuples from ``_tts_queue``, checks the
+        TTS cache, synthesises on miss, and plays audio via
+        ``audio_output.play_blocking``.  Barge-in is checked both before
+        synthesis and before playback so interrupted turns are skipped quickly.
+
+        Send ``None`` as a sentinel to shut the worker down.
+        """
+        while True:
+            item = self._tts_queue.get()
+            if item is None:
+                self._tts_queue.task_done()
+                break
+
+            sentence, voice, lang = item
+
+            try:
+                # Skip if user barged in
+                if self._bargein_event.is_set():
+                    continue
+
+                # Check TTS cache first
+                cached = self._tts_cache.get(sentence, voice, lang)
+                if cached:
+                    audio_data, sample_rate = cached.audio, cached.sample_rate
+                else:
+                    tts_result = self.engine.synthesize(
+                        sentence, voice=voice, language=lang,
+                    )
+                    audio_data = tts_result.audio
+                    sample_rate = tts_result.sample_rate
+                    self._tts_cache.put(sentence, voice, lang, audio_data, sample_rate)
+
+                # Check barge-in again after (potentially slow) synthesis
+                if self._bargein_event.is_set():
+                    continue
+
+                self.audio_output.play_blocking(audio_data, sample_rate)
+
+                # Stream sentence to transcript overlay
+                if self._vision_preview is not None:
+                    self._vision_preview.add_transcript_stream(sentence)
+            except Exception as exc:
+                logger.error("TTS worker error: %s", exc)
+            finally:
+                self._tts_queue.task_done()
+
     def _speak_sentences(self, text: str) -> bool:
         """Split text into sentences, synthesize and play each one.
 
@@ -1882,15 +2274,28 @@ class VoiceAssistant:
                 logger.debug("Barge-in — stopping speech")
                 return False
 
-            tts_result = self.engine.synthesize(
-                sentence,
-                voice=self.config.tts_voice,
-                language=self.config.tts_language,
-            )
+            # Stream sentence to transcript page
+            if self._vision_preview is not None:
+                self._vision_preview.add_transcript_stream(sentence)
+
+            # Check TTS cache before synthesizing
+            voice = self.config.tts_voice
+            lang = self.config.tts_language
+            cached = self._tts_cache.get(sentence, voice, lang)
+            if cached:
+                audio = cached.audio
+                sr = cached.sample_rate
+            else:
+                tts_result = self.engine.synthesize(
+                    sentence,
+                    voice=voice,
+                    language=lang,
+                )
+                audio = tts_result.audio
+                sr = tts_result.sample_rate
+                self._tts_cache.put(sentence, voice, lang, audio, sr)
 
             # Play with interruptible aplay (Popen, not blocking run)
-            audio = tts_result.audio
-            sr = tts_result.sample_rate
 
             if audio.dtype != np.int16:
                 if audio.dtype in (np.float32, np.float64):

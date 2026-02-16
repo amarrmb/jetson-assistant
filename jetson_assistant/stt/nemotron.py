@@ -81,8 +81,44 @@ class NemotronBackend(STTBackend):
         # Set to eval mode
         self._model.eval()
 
+        # Disable CUDA graphs for the RNNT decoder — they cause
+        # "Capture must end on the same stream" errors in Docker
+        # containers on Jetson Thor (SBSA CUDA runtime).  The graph
+        # controls live on the *inner* decoding object, not the
+        # top-level RNNTBPEDecoding wrapper.
+        self._disable_cuda_graphs()
+
         self._loaded = True
         logger.info("Nemotron Speech loaded on %s", device)
+
+    def _disable_cuda_graphs(self) -> None:
+        """Disable CUDA graph capture in the RNNT decoder.
+
+        NeMo's RNNT greedy decoder uses CUDA graphs for faster
+        inference, but this fails in Docker containers on Jetson Thor
+        with 'Capture must end on the same stream it began on'.
+
+        The graph controls live on the inner GreedyBatchedRNNTInfer
+        (model.decoding.decoding), NOT the outer RNNTBPEDecoding
+        wrapper (model.decoding).
+        """
+        try:
+            inner = getattr(self._model.decoding, "decoding", None)
+            if inner is None:
+                return
+
+            # Disable the top-level flag
+            if hasattr(inner, "use_cuda_graph_decoder"):
+                inner.use_cuda_graph_decoder = False
+                logger.info("Set use_cuda_graph_decoder=False on %s", type(inner).__name__)
+
+            # Disable on the decoding computer (label looping)
+            dc = getattr(inner, "decoding_computer", None)
+            if dc is not None and hasattr(dc, "disable_cuda_graphs"):
+                dc.disable_cuda_graphs()
+                logger.info("Disabled CUDA graphs on %s", type(dc).__name__)
+        except Exception:
+            logger.warning("Could not disable CUDA graphs", exc_info=True)
 
     def transcribe(
         self,
@@ -125,8 +161,15 @@ class NemotronBackend(STTBackend):
             audio_int16 = (audio_float * 32767).astype(np.int16)
             wavfile.write(tmp.name, 16000, audio_int16)
 
-            # Transcribe using file path
-            transcriptions = self._model.transcribe([tmp.name])
+            # Transcribe using file path.
+            # Force CUDA context on this thread (NeMo's RNNT uses CUDA
+            # graph capture, which fails if called from a different thread
+            # than the one that loaded the model).
+            import torch
+            if self._device == "cuda":
+                torch.cuda.set_device(0)
+            with torch.no_grad():
+                transcriptions = self._model.transcribe([tmp.name])
 
         # NeMo returns a list of strings (or Hypothesis objects)
         if isinstance(transcriptions, list) and len(transcriptions) > 0:
