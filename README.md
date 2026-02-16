@@ -5,8 +5,7 @@ On-device voice + vision AI for NVIDIA Jetson. No cloud, no API keys, sub-second
 Kokoro TTS + Nemotron STT + Qwen2.5-VL VLM — all running locally on Jetson Thor.
 Ask it questions, point a camera, get spoken answers in ~700ms.
 
-<!-- TODO: replace with actual demo -->
-<!-- ![Demo](docs/demo.gif) -->
+[![Watch the video](http://img.youtube.com/vi/zOygCx3Tuxc/0.jpg)](http://www.youtube.com/watch?v=zOygCx3Tuxc "Local assistant on Jetson")
 
 ## Try It (Jetson Thor)
 
