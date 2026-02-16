@@ -7,6 +7,8 @@ Ask it questions, point a camera, get spoken answers in ~700ms.
 
 [![Watch the video](http://img.youtube.com/vi/zOygCx3Tuxc/0.jpg)](http://www.youtube.com/watch?v=zOygCx3Tuxc "Local assistant on Jetson")
 
+(Clicking the thumbnail didnt work? Try the link for watching it in action: https://youtu.be/zOygCx3Tuxc)
+
 ## Try It (Jetson Thor)
 
 ```bash
