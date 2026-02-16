@@ -30,12 +30,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # ── System dependencies ──────────────────────────────────────────────────
 # Audio: espeak-ng (Kokoro dep), ALSA, portaudio, sndfile, ffmpeg
+# pipewire-alsa: ALSA→PulseAudio plugin for Bluetooth and system default support
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-dev \
     build-essential \
     espeak-ng libespeak-ng1 \
     libsndfile1 ffmpeg alsa-utils \
     portaudio19-dev libasound2-dev \
+    pipewire-alsa \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -59,9 +61,11 @@ RUN pip install --no-cache-dir --break-system-packages \
 # Note: [assistant] extra includes openwakeword which needs tflite-runtime
 # (no aarch64 wheel). The Thor demo uses energy-based wake word detection,
 # so we install assistant deps individually, skipping openwakeword.
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY . .
 RUN pip install --no-cache-dir --break-system-packages \
-    -e ".[kokoro,nemotron,vision]" \
+    -e ".[kokoro,nemotron,vision,search]" \
     sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0 openai>=1.0 \
     "setuptools<82"
 
@@ -75,5 +79,5 @@ RUN rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
 
 EXPOSE 8080 9090
 
-ENTRYPOINT ["jetson-assistant"]
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["assistant", "--config", "configs/thor-sota.yaml"]

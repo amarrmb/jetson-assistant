@@ -27,6 +27,11 @@ def _find_usb_audio_device(kind: str = "input") -> Optional[int]:
     On Jetson, the system default is often an HDMI or APE virtual device with no
     real microphone. This scans for USB audio devices and picks the best one.
 
+    In Docker, the docker-entrypoint.sh script configures ALSA to route the
+    default device to the USB audio device. When that's in place, returning
+    None here (use default) is correct. This function is the native-mode
+    fallback for when no ALSA config override exists.
+
     Args:
         kind: "input" or "output"
 
@@ -258,12 +263,21 @@ class AudioInput:
         self._callback = None
         self._running = False
 
-        # Auto-detect USB audio device if none specified
+        # Auto-detect USB audio device if none specified.
+        # In Docker, the entrypoint generates an .asoundrc that routes the ALSA
+        # default to the USB device. In that case, device=None (ALSA default) is
+        # correct — don't override it with PortAudio device scanning, which may
+        # return the wrong device due to enumeration bugs in Docker on Jetson.
         if device is None:
-            device = _find_usb_audio_device(kind="input")
-            if device is not None:
-                logger.info("Auto-detected USB input device: [%d] %s",
-                            device, sd.query_devices(device)["name"])
+            import pathlib
+            has_asoundrc = pathlib.Path("/root/.asoundrc").exists()
+            if has_asoundrc:
+                logger.info("Using ALSA default device (configured by docker-entrypoint)")
+            else:
+                device = _find_usb_audio_device(kind="input")
+                if device is not None:
+                    logger.info("Auto-detected USB input device: [%d] %s",
+                                device, sd.query_devices(device)["name"])
         self.device = device
 
         # Get device info for logging
