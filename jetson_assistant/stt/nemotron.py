@@ -62,23 +62,22 @@ class NemotronBackend(STTBackend):
 
         logger.info("Loading Nemotron Speech (%s)...", model_name)
 
-        # Determine device
+        # Determine device — probe cuBLAS with a small matmul to check
+        # GPU compatibility (standard pip wheels lack Blackwell sm_12.1;
+        # SBSA wheels work fine).
         if device == "auto":
             try:
                 import torch
                 if torch.cuda.is_available():
-                    cap = torch.cuda.get_device_capability(0)
-                    if cap[0] >= 12:
-                        # Blackwell GPUs (sm_12.1+) trigger cuBLAS errors with
-                        # the pip PyTorch build (max supported sm_12.0). Use CPU.
-                        device = "cpu"
-                        logger.info("Blackwell GPU (sm_%d.%d) — using CPU for Nemotron STT", *cap)
-                    else:
-                        device = "cuda"
+                    a = torch.randn(8, 8, device="cuda")
+                    _ = a @ a.T  # triggers cuBLAS
+                    device = "cuda"
+                    logger.info("CUDA matmul probe: OK — Nemotron will use GPU")
                 else:
                     device = "cpu"
-            except ImportError:
+            except Exception as e:
                 device = "cpu"
+                logger.info("CUDA matmul probe failed (%s) — Nemotron will use CPU", e)
             self._device = device
 
         # Load the model from HuggingFace

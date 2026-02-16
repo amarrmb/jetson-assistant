@@ -28,7 +28,7 @@ ARG PLATFORM=thor
 FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04 AS base-thor
 FROM nvcr.io/nvidia/l4t-cuda:12.6.68-runtime AS base-orin
 FROM nvcr.io/nvidia/l4t-cuda:12.6.68-runtime AS base-nano
-FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04 AS base-spark
+FROM nvidia/cuda:13.0.1-cudnn-devel-ubuntu24.04 AS base-spark
 FROM base-${PLATFORM} AS base
 
 # Re-declare after FROM (Docker resets ARGs)
@@ -57,9 +57,9 @@ ARG INSTALL_FLASH_ATTN_nano=false
 ARG DEFAULT_CONFIG_nano=configs/nano.yaml
 ARG EXTRAS_nano=whisper,piper,search
 
-# DGX Spark: Blackwell GB10, CUDA 13.0, Ubuntu 24.04 (standard PyTorch, not Jetson)
-ARG PYTORCH_INDEX_spark=https://download.pytorch.org/whl/cu130
-ARG PYTORCH_PKGS_spark="torch torchvision torchaudio"
+# DGX Spark: Blackwell GB10, CUDA 13.0, Ubuntu 24.04 (SBSA wheels — same as Thor)
+ARG PYTORCH_INDEX_spark=https://pypi.jetson-ai-lab.io/sbsa/cu130
+ARG PYTORCH_PKGS_spark="torch==2.9.1 torchvision==0.24.1 torchaudio"
 ARG INSTALL_FLASH_ATTN_spark=false
 ARG DEFAULT_CONFIG_spark=configs/spark.yaml
 ARG EXTRAS_spark=kokoro,nemotron,vision,search
@@ -85,7 +85,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     portaudio19-dev libasound2-dev \
     pipewire-alsa \
     curl \
+    # NVPL + cuDSS: required by Jetson AI Lab SBSA PyTorch wheels (Thor + Spark)
+    libnvpl-lapack0 libnvpl-blas0 libcudss0-cuda-13 \
     && rm -rf /var/lib/apt/lists/*
+
+# Add non-standard NVIDIA lib paths for SBSA wheels (libcudss, libnvpl)
+ENV LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu/libcudss/13:${LD_LIBRARY_PATH}"
 
 WORKDIR /app
 
