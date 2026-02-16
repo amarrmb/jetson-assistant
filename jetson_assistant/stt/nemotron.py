@@ -32,12 +32,12 @@ class NemotronBackend(STTBackend):
     def __init__(self):
         super().__init__()
         self._model_size = "0.6b"
-        self._device = "cuda"
+        self._device = "auto"
 
     def load(
         self,
         model_size: str = "0.6b",
-        device: str = "cuda",
+        device: str = "auto",
         model_name: str = "nvidia/nemotron-speech-streaming-en-0.6b",
         **kwargs,
     ) -> None:
@@ -84,8 +84,11 @@ class NemotronBackend(STTBackend):
         # Load the model from HuggingFace
         self._model = nemo_asr.models.ASRModel.from_pretrained(model_name=model_name)
 
-        # Move to device
-        if device == "cuda":
+        # Move to device — NeMo's from_pretrained auto-loads onto CUDA,
+        # so we must explicitly move to CPU when needed (e.g. Blackwell).
+        if device == "cpu":
+            self._model = self._model.cpu()
+        elif device == "cuda":
             self._model = self._model.cuda()
 
         # Set to eval mode
