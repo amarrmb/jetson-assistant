@@ -19,6 +19,115 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+# ── Live transcript HTML page (served at http://<host>:9090/) ──
+_TRANSCRIPT_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jetson-assistant</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f0f0f; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; height: 100vh; display: flex; }
+  .camera { width: 45%; background: #000; display: flex; align-items: center; justify-content: center; position: relative; }
+  .camera img { width: 100%; height: 100%; object-fit: contain; }
+  .camera-label { position: absolute; top: 16px; left: 16px; font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1.5px; }
+  .chat-panel { width: 55%; display: flex; flex-direction: column; border-left: 1px solid #1a1a1a; }
+  .chat-header { padding: 20px 24px; border-bottom: 1px solid #1a1a1a; position: relative; }
+  .chat-header h1 { font-size: 16px; font-weight: 600; color: #fff; }
+  .chat-header p { font-size: 12px; color: #666; margin-top: 4px; }
+  .chat-messages { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; animation: fadeIn 0.2s ease; }
+  .msg .ts { font-size: 10px; color: #555; margin-top: 4px; }
+  .msg-user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
+  .msg-user .ts { color: rgba(255,255,255,0.5); }
+  .msg-assistant { align-self: flex-start; background: #1e1e1e; color: #e0e0e0; border-bottom-left-radius: 4px; }
+  .status { padding: 12px 24px; border-top: 1px solid #1a1a1a; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; }
+  .dot.listening { background: #eab308; animation: pulse 1s infinite; }
+  .status span { font-size: 12px; color: #888; }
+  .pipeline { padding: 8px 24px; border-top: 1px solid #1a1a1a; display: flex; gap: 16px; }
+  .pipe-stage { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 1px; }
+  .pipe-stage.active { color: #22c55e; }
+  .pipe-stage .label { display: block; }
+  .pipe-stage .val { color: #888; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; background: #1a2e1a; color: #22c55e; margin-left: 8px; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+</style>
+</head>
+<body>
+<div class="camera">
+  <span class="camera-label">Live Camera</span>
+  <img src="/video" alt="camera">
+</div>
+<div class="chat-panel">
+  <div class="chat-header">
+    <h1>jetson-assistant</h1>
+    <p>On-device voice AI &mdash; Jetson Thor</p>
+    <button id="clear-btn" onclick="document.getElementById('msgs').innerHTML=''" style="position:absolute;right:24px;top:20px;background:#1e1e1e;border:1px solid #333;color:#888;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;">Clear</button>
+  </div>
+  <div class="chat-messages" id="msgs"></div>
+  <div class="pipeline">
+    <div class="pipe-stage" id="ps-stt"><span class="label">STT</span><span class="val" id="pv-stt">--</span></div>
+    <div class="pipe-stage" id="ps-llm"><span class="label">LLM</span><span class="val" id="pv-llm">--</span></div>
+    <div class="pipe-stage" id="ps-tts"><span class="label">TTS</span><span class="val" id="pv-tts">--</span></div>
+    <span class="badge">STREAMING</span>
+  </div>
+  <div class="status"><div class="dot" id="dot"></div><span id="status">Connected</span></div>
+</div>
+<script>
+const msgs = document.getElementById('msgs');
+const dot = document.getElementById('dot');
+const status = document.getElementById('status');
+const es = new EventSource('/events');
+let streamEl = null;
+let streamText = '';
+es.onmessage = (e) => {
+  const d = JSON.parse(e.data);
+  if (d.type === 'timing') {
+    const el = document.getElementById('pv-' + d.stage);
+    const ps = document.getElementById('ps-' + d.stage);
+    if (el) { el.textContent = d.ms + 'ms'; }
+    if (ps) { ps.className = 'pipe-stage active'; setTimeout(() => ps.className = 'pipe-stage', 2000); }
+    return;
+  }
+  if (d.type === 'stream') {
+    if (!streamEl) {
+      streamEl = document.createElement('div');
+      streamEl.className = 'msg msg-assistant';
+      streamEl.innerHTML = '<span class="stream-text"></span><div class="ts">' + d.ts + '</div>';
+      msgs.appendChild(streamEl);
+      streamText = '';
+    }
+    streamText += (streamText ? ' ' : '') + d.text;
+    streamEl.querySelector('.stream-text').textContent = streamText;
+    msgs.scrollTop = msgs.scrollHeight;
+    dot.className = 'dot listening'; status.textContent = 'Speaking...';
+    return;
+  }
+  if (d.role === 'assistant' && streamEl) { streamEl = null; streamText = ''; return; }
+  if (d.role === 'assistant') {
+    const div = document.createElement('div');
+    div.className = 'msg msg-assistant';
+    div.innerHTML = d.text + '<div class="ts">' + d.ts + '</div>';
+    msgs.appendChild(div);
+  } else {
+    streamEl = null; streamText = '';
+    const div = document.createElement('div');
+    div.className = 'msg msg-user';
+    div.innerHTML = d.text + '<div class="ts">' + d.ts + '</div>';
+    msgs.appendChild(div);
+    dot.className = 'dot listening'; status.textContent = 'Processing...';
+  }
+  msgs.scrollTop = msgs.scrollHeight;
+  if (d.role === 'assistant') { dot.className = 'dot'; status.textContent = 'Listening'; }
+};
+es.onerror = () => { dot.className = 'dot'; status.textContent = 'Reconnecting...'; };
+</script>
+</body>
+</html>"""
+
 import numpy as np
 
 
@@ -169,6 +278,7 @@ class WatchCondition:
     description: str  # e.g., "an apple"
     prompt: str  # e.g., "Do you see an apple in this image? Answer only YES or NO."
     announce_template: str  # e.g., "I can see an apple now!"
+    invert: bool = False  # If True, trigger when VLM says NO (absence detection)
 
 
 class VisionMonitor:
@@ -367,6 +477,37 @@ class VisionPreview:
         # Shared MJPEG frame (atomic reference swap — no lock needed)
         self._latest_jpeg: Optional[bytes] = None
 
+        # Live transcript for browser page (capped at 100 entries)
+        self._transcript: list[dict] = []
+        self._transcript_id = 0
+
+    def add_transcript(self, role: str, text: str) -> None:
+        """Append a transcript entry (thread-safe, used from core.py)."""
+        self._transcript_id += 1
+        entry = {"id": self._transcript_id, "type": "msg", "role": role,
+                 "text": text, "ts": time.strftime("%H:%M:%S")}
+        self._transcript.append(entry)
+        if len(self._transcript) > 100:
+            self._transcript = self._transcript[-100:]
+
+    def add_transcript_stream(self, text: str) -> None:
+        """Append/update a streaming assistant message (shows words appearing live)."""
+        self._transcript_id += 1
+        entry = {"id": self._transcript_id, "type": "stream",
+                 "text": text, "ts": time.strftime("%H:%M:%S")}
+        self._transcript.append(entry)
+        if len(self._transcript) > 100:
+            self._transcript = self._transcript[-100:]
+
+    def add_timing(self, stage: str, ms: float) -> None:
+        """Append a timing event (stt/llm/tts) for the pipeline display."""
+        self._transcript_id += 1
+        entry = {"id": self._transcript_id, "type": "timing",
+                 "stage": stage, "ms": round(ms)}
+        self._transcript.append(entry)
+        if len(self._transcript) > 100:
+            self._transcript = self._transcript[-100:]
+
     def set_overlay(self, lines: list[str]) -> None:
         """Update the overlay text lines (thread-safe)."""
         with self._overlay_lock:
@@ -534,34 +675,65 @@ class VisionPreview:
 
         class MJPEGHandler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                if self.path != "/":
+                if self.path == "/video":
+                    self._stream_mjpeg()
+                elif self.path == "/events":
+                    self._stream_sse()
+                elif self.path == "/":
+                    self._serve_page()
+                else:
                     self.send_error(404)
-                    return
 
+            def _serve_page(self):
+                html = _TRANSCRIPT_HTML
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(html)))
+                self.end_headers()
+                self.wfile.write(html.encode())
+
+            def _stream_mjpeg(self):
                 self.send_response(200)
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
-
                 try:
                     while not preview._stop_event.is_set():
                         jpeg = preview._latest_jpeg
                         if jpeg is None:
                             time.sleep(0.1)
                             continue
-
                         self.wfile.write(b"--frame\r\n")
                         self.wfile.write(b"Content-Type: image/jpeg\r\n")
                         self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode())
                         self.wfile.write(jpeg)
                         self.wfile.write(b"\r\n")
                         self.wfile.flush()
-
                         time.sleep(1.0 / preview._fps)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
+            def _stream_sse(self):
+                import json as _json
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.end_headers()
+                last_id = 0
+                try:
+                    while not preview._stop_event.is_set():
+                        entries = preview._transcript
+                        new = [e for e in entries if e["id"] > last_id]
+                        for e in new:
+                            data = _json.dumps(e)
+                            self.wfile.write(f"data: {data}\n\n".encode())
+                            last_id = e["id"]
+                        self.wfile.flush()
+                        time.sleep(0.3)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
             def log_message(self, format, *args):
-                # Suppress default request logging
                 pass
 
         class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):

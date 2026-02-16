@@ -248,9 +248,33 @@ def voices(
     console.print(f"\n[bold]Languages:[/bold] {', '.join(languages)}")
 
 
+def _resolve_config(auto: bool = False, config: str = None) -> str:
+    """Resolve the config file path.
+
+    Priority:
+      1. Explicit --config path (returned as-is)
+      2. --auto: detect hardware tier and return its config path
+      3. Default: "configs/thor.yaml"
+
+    Returns:
+        Path string to the YAML config file.
+    """
+    if config:
+        return config
+    if auto:
+        from jetson_assistant.hardware import detect_tier
+
+        tier = detect_tier()
+        config_path = tier.config
+        console.print(f"[dim]Auto-detected: {tier.value} tier -> {config_path}[/dim]")
+        return config_path
+    return "configs/thor.yaml"
+
+
 @app.command()
 def assistant(
     config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="YAML config preset (e.g., configs/thor-sota.yaml)"),
+    auto: bool = typer.Option(False, "--auto", help="Auto-detect hardware tier and select config"),
     server: bool = typer.Option(False, "--server", "-s", help="Connect to running server (FAST, recommended)"),
     server_port: int = typer.Option(8080, "--server-port", help="Server port when using --server"),
     local_llm: bool = typer.Option(False, "--local-llm", help="Use local LLM instead of server LLM (slower)"),
@@ -299,6 +323,9 @@ def assistant(
         # Terminal 2: Run assistant
         jetson-assistant assistant --server --llm-model phi3:mini
 
+    Example (auto-detect hardware):
+        jetson-assistant assistant --auto
+
     Example (slow, loads models each time):
         jetson-assistant assistant --llm ollama --llm-model llama3.2:3b
     """
@@ -306,14 +333,22 @@ def assistant(
 
     console.print("[bold]Jetson Voice Assistant[/bold]\n")
 
-    # Load YAML config preset if provided
+    # Resolve config: explicit --config > --auto > default
+    resolved_config = _resolve_config(
+        auto=auto,
+        config=str(config_file) if config_file is not None else None,
+    )
+
+    # Load YAML config preset
     yaml_config: dict = {}
-    if config_file is not None:
-        if not config_file.exists():
-            console.print(f"[red]Error: Config file not found: {config_file}[/red]")
-            raise typer.Exit(1)
-        yaml_config = AssistantConfig.from_yaml(str(config_file))
-        console.print(f"[dim]Loaded config: {config_file}[/dim]")
+    resolved_path = Path(resolved_config)
+    if resolved_path.exists():
+        yaml_config = AssistantConfig.from_yaml(str(resolved_path))
+        console.print(f"[dim]Loaded config: {resolved_path}[/dim]")
+    elif config_file is not None:
+        # Explicit --config was given but file doesn't exist
+        console.print(f"[red]Error: Config file not found: {config_file}[/red]")
+        raise typer.Exit(1)
 
     # Determine effective values: CLI args override YAML, YAML overrides defaults.
     # We detect which CLI args were explicitly passed by checking against their defaults.

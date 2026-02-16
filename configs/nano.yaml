@@ -1,0 +1,34 @@
+# Jetson Orin Nano — Functional UX, Text Only
+# VRAM: 8GB | Target E2E: <1.5s
+#
+# Ollama 1.5B + Piper TTS + Whisper tiny STT
+# Minimal footprint for constrained hardware. No vision.
+#
+# Prerequisites:
+#   docker compose -f docker-compose.nano.yml up -d   # starts Ollama
+#   pip install -e ".[whisper,assistant]"
+#
+# Usage:
+#   jetson-assistant assistant --config configs/nano.yaml
+#   jetson-assistant assistant --auto   # auto-detects Nano and uses this
+
+# TTS: Functional tier (fast, low memory)
+tts_backend: piper
+tts_voice: en_US-lessac-medium
+
+# STT: Lightweight tier (tiny model, CPU-friendly)
+stt_backend: whisper
+stt_model: tiny
+
+# LLM: Compact tier (1.5B text-only, runs in 8GB)
+llm_backend: ollama
+llm_model: "qwen2.5:1.5b"
+
+# Vision: disabled (insufficient VRAM for VLM)
+vision_enabled: false
+
+# Always listening (no wake word model needed)
+wake_word_backend: energy
+
+# Show timing info
+verbose: true

@@ -1,0 +1,36 @@
+# Jetson Thor — Best UX, Full Pipeline
+# VRAM: 128GB | Target E2E: <700ms
+#
+# NVFP4 7B VLM + Kokoro TTS + Nemotron STT
+# Fastest config with near-human voice quality.
+#
+# Prerequisites:
+#   docker compose -f docker-compose.thor.yml up -d   # starts vLLM NVFP4 7B
+#   apt-get install espeak-ng                          # required by Kokoro
+#   pip install -e ".[kokoro,nemotron,assistant,vision]"
+#
+# Usage:
+#   jetson-assistant assistant --config configs/thor.yaml
+#   jetson-assistant assistant --auto   # auto-detects Thor and uses this
+
+# TTS: Natural tier (near-human prosody, <300ms)
+tts_backend: kokoro
+tts_voice: af_heart
+
+# STT: Accurate tier (low WER, handles names, ~24ms)
+stt_backend: nemotron
+
+# VLM: Full tier (7B vision-language model, NVFP4 quantized)
+llm_backend: vllm
+llm_host: "http://localhost:8001/v1"
+llm_model: "nvidia/Qwen2.5-VL-7B-Instruct-NVFP4"
+
+# Vision: camera + MJPEG browser stream
+vision_enabled: true
+stream_vision_port: 9090
+
+# Always listening (no wake word model needed)
+wake_word_backend: energy
+
+# Show timing info
+verbose: true
