@@ -21,10 +21,10 @@ tts_voice: af_heart
 # STT: Accurate tier (low WER, handles names, ~24ms)
 stt_backend: nemotron
 
-# VLM: Full tier (7B vision-language model, FP16 — no quantization needed w/ 128GB)
+# VLM: Full tier (7B NVFP4 quantized — same as Thor, faster inference)
 llm_backend: vllm
 llm_host: "http://localhost:8001/v1"
-llm_model: "Qwen/Qwen2.5-VL-7B-Instruct"
+llm_model: "nvidia/Qwen2.5-VL-7B-Instruct-NVFP4"
 
 # Vision: camera + MJPEG browser stream
 vision_enabled: true
