@@ -135,9 +135,30 @@ class KokoroBackend(TTSBackend):
         self._lang_code = resolved_lang
         self._current_voice = voice
 
+        # Blackwell GPUs (sm_12.1+) aren't fully supported by PyTorch's cuBLAS
+        # yet, causing CUBLAS_STATUS_NOT_INITIALIZED during inference. Force CPU
+        # for Kokoro (82M params — fast enough on ARM cores).
+        self._force_cpu = False
+        try:
+            import torch
+            if torch.cuda.is_available():
+                cap = torch.cuda.get_device_capability(0)
+                if cap[0] >= 12:
+                    self._force_cpu = True
+                    logger.info("Blackwell GPU detected (sm_%d.%d) — will move Kokoro to CPU", *cap)
+        except Exception:
+            pass
+
         logger.info("Loading Kokoro TTS (lang=%s, voice=%s)...", resolved_lang, voice)
 
         pipeline = KPipeline(lang_code=resolved_lang)
+
+        # Move model to CPU if GPU is unsupported (setting CUDA_VISIBLE_DEVICES
+        # doesn't work after torch is initialized — must move tensors explicitly)
+        if self._force_cpu and hasattr(pipeline, 'model') and pipeline.model is not None:
+            pipeline.model = pipeline.model.cpu()
+            logger.info("Kokoro model moved to CPU")
+
         self._pipelines[resolved_lang] = pipeline
 
         # Pre-load voice weights to avoid first-call delay

@@ -1,22 +1,68 @@
-# ── Jetson Assistant — Jetson Thor (JetPack 7, CUDA 13, sm_110) ──────────
+# ── Jetson Assistant — Multi-Platform ──────────────────────────────────
 #
-# On-device voice + vision AI. Pre-bundles PyTorch 2.9.1, flash-attn 2.8.3
-# (sm_110), Kokoro TTS, Nemotron STT, and all audio dependencies.
-# No compilation needed — just pull and run.
+# On-device voice + vision AI. Pre-bundles PyTorch, Kokoro TTS, Nemotron
+# STT, and all audio dependencies.
 #
-# Build on Thor:
-#   docker build -t jetson-assistant:thor .
+# Build args select the platform:
+#   PLATFORM=thor  (default) — JetPack 7, CUDA 13.0, sm_110 (SBSA)
+#   PLATFORM=orin  — JetPack 6.x, CUDA 12.6, sm_87 (tegra)
+#   PLATFORM=nano  — JetPack 6.x, CUDA 12.6, sm_87 (tegra, no VLM)
+#   PLATFORM=spark — DGX Spark, CUDA 13.0, sm_121 (Blackwell GB10)
+#
+# Build:
+#   docker build -t jetson-assistant:thor .                            # Thor (default)
+#   docker build -t jetson-assistant:orin --build-arg PLATFORM=orin .  # AGX Orin
+#   docker build -t jetson-assistant:nano --build-arg PLATFORM=nano .  # Orin Nano
+#   docker build -t jetson-assistant:spark --build-arg PLATFORM=spark . # DGX Spark
 #
 # Run with docker compose:
-#   docker compose up -d       # starts vLLM + assistant
-#
-# Adapting for other platforms:
-#   - Change the base image CUDA version
-#   - Change the PyTorch index URL for your CUDA version
-#   - Rebuild flash-attn for your GPU arch (see wheels/README.md)
-#   - Adjust configs/ for your hardware
+#   docker compose -f docker-compose.thor.yml up -d
+#   docker compose -f docker-compose.orin.yml up -d
+#   docker compose -f docker-compose.nano.yml up -d
+#   docker compose -f docker-compose.spark.yml up -d
 
-FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
+# ── Platform selection ───────────────────────────────────────────────
+ARG PLATFORM=thor
+
+# Per-platform base images (BuildKit only pulls the selected one)
+FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04 AS base-thor
+FROM nvcr.io/nvidia/l4t-cuda:12.6.68-runtime AS base-orin
+FROM nvcr.io/nvidia/l4t-cuda:12.6.68-runtime AS base-nano
+FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04 AS base-spark
+FROM base-${PLATFORM} AS base
+
+# Re-declare after FROM (Docker resets ARGs)
+ARG PLATFORM=thor
+
+# ── Platform-specific build args ─────────────────────────────────────
+
+# Thor: JetPack 7, CUDA 13.0, Ubuntu 24.04 (SBSA architecture)
+ARG PYTORCH_INDEX_thor=https://pypi.jetson-ai-lab.io/sbsa/cu130
+ARG PYTORCH_PKGS_thor="torch==2.9.1 torchvision==0.24.1 torchaudio"
+ARG INSTALL_FLASH_ATTN_thor=true
+ARG DEFAULT_CONFIG_thor=configs/thor-sota.yaml
+ARG EXTRAS_thor=kokoro,nemotron,vision,search
+
+# Orin: JetPack 6.x, CUDA 12.6, Ubuntu 22.04 (tegra architecture)
+ARG PYTORCH_INDEX_orin=https://pypi.jetson-ai-lab.io/jp6/cu126
+ARG PYTORCH_PKGS_orin="torch torchvision torchaudio"
+ARG INSTALL_FLASH_ATTN_orin=false
+ARG DEFAULT_CONFIG_orin=configs/orin.yaml
+ARG EXTRAS_orin=kokoro,nemotron,vision,search
+
+# Nano: Same base as Orin but lighter config (no VLM, uses Ollama + Piper)
+ARG PYTORCH_INDEX_nano=https://pypi.jetson-ai-lab.io/jp6/cu126
+ARG PYTORCH_PKGS_nano="torch torchaudio"
+ARG INSTALL_FLASH_ATTN_nano=false
+ARG DEFAULT_CONFIG_nano=configs/nano.yaml
+ARG EXTRAS_nano=whisper,piper,search
+
+# DGX Spark: Blackwell GB10, CUDA 13.0, Ubuntu 24.04 (standard PyTorch, not Jetson)
+ARG PYTORCH_INDEX_spark=https://download.pytorch.org/whl/cu130
+ARG PYTORCH_PKGS_spark="torch torchvision torchaudio"
+ARG INSTALL_FLASH_ATTN_spark=false
+ARG DEFAULT_CONFIG_spark=configs/spark.yaml
+ARG EXTRAS_spark=kokoro,nemotron,vision,search
 
 LABEL org.opencontainers.image.source="https://github.com/amarrmb/jetson-assistant" \
       org.opencontainers.image.description="On-device voice + vision AI for NVIDIA Jetson" \
@@ -28,9 +74,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=all
 
-# ── System dependencies ──────────────────────────────────────────────────
+# ── System dependencies ──────────────────────────────────────────────
 # Audio: espeak-ng (Kokoro dep), ALSA, portaudio, sndfile, ffmpeg
-# pipewire-alsa: ALSA→PulseAudio plugin for Bluetooth and system default support
+# pipewire-alsa: ALSA→PipeWire plugin for Bluetooth and system default support
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-dev \
     build-essential \
@@ -43,31 +89,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# ── 1. PyTorch from NVIDIA Jetson AI Lab (CUDA 13.0 / aarch64 SBSA) ─────
-RUN pip install --no-cache-dir --break-system-packages \
-    torch==2.9.1 torchvision==0.24.1 torchaudio \
-    --index-url https://pypi.jetson-ai-lab.io/sbsa/cu130
+# ── 1. PyTorch from NVIDIA Jetson AI Lab ─────────────────────────────
+# Platform selects the right index URL and packages via build args.
+RUN PYTORCH_INDEX=$(eval echo \${PYTORCH_INDEX_${PLATFORM}}) && \
+    PYTORCH_PKGS=$(eval echo \${PYTORCH_PKGS_${PLATFORM}}) && \
+    echo "Installing PyTorch for ${PLATFORM}: ${PYTORCH_PKGS} from ${PYTORCH_INDEX}" && \
+    pip install --no-cache-dir --break-system-packages \
+        ${PYTORCH_PKGS} \
+        --index-url ${PYTORCH_INDEX}
 
-# ── 2. Pre-built flash-attn (sm_110 — saves ~1hr compile on Thor) ────────
-# Build your own: see wheels/README.md
-# Triton is needed by flash-attn's rotary embedding ops (used by transformers)
+# ── 2. Flash-attn (Thor only — pre-built wheel for sm_110) ──────────
+# Orin/Nano skip this step — they use SDPA attention instead.
+# To add flash-attn for Orin, build a wheel for sm_87 (see wheels/README.md).
 COPY wheels/ /tmp/wheels/
-RUN pip install --no-cache-dir --break-system-packages \
-    triton \
-    /tmp/wheels/flash_attn-*.whl \
-    && rm -rf /tmp/wheels
+RUN INSTALL_FA=$(eval echo \${INSTALL_FLASH_ATTN_${PLATFORM}}) && \
+    if [ "${INSTALL_FA}" = "true" ]; then \
+        echo "Installing flash-attn for ${PLATFORM}" && \
+        pip install --no-cache-dir --break-system-packages \
+            triton \
+            /tmp/wheels/flash_attn-*.whl; \
+    else \
+        echo "Skipping flash-attn for ${PLATFORM} (uses SDPA)"; \
+    fi && \
+    rm -rf /tmp/wheels
 
-# ── 3. Application + recommended backends ─────────────────────────────────
-# Note: [assistant] extra includes openwakeword which needs tflite-runtime
-# (no aarch64 wheel). The Thor demo uses energy-based wake word detection,
-# so we install assistant deps individually, skipping openwakeword.
+# ── 3. Application + recommended backends ────────────────────────────
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY . .
-RUN pip install --no-cache-dir --break-system-packages \
-    -e ".[kokoro,nemotron,vision,search]" \
-    sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0 openai>=1.0 \
-    "setuptools<82"
+RUN EXTRAS=$(eval echo \${EXTRAS_${PLATFORM}}) && \
+    echo "Installing extras: ${EXTRAS}" && \
+    pip install --no-cache-dir --break-system-packages \
+        -e ".[${EXTRAS}]" \
+        sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0 openai>=1.0 \
+        "setuptools<82"
 
 # Pre-download spacy model (Kokoro TTS dependency, ~13MB)
 # Use pip directly — `spacy download` imports torch which needs NVPL (runtime only)
@@ -75,9 +130,12 @@ RUN pip install --no-cache-dir --break-system-packages \
     https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 
 # Remove PEP 668 marker so runtime pip calls (e.g. Kokoro voice download) work
-RUN rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
+RUN rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED
 
 EXPOSE 8080 9090
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["assistant", "--config", "configs/thor-sota.yaml"]
+# Write platform-specific default config path (read by entrypoint when no args)
+RUN DEFAULT_CFG=$(eval echo \${DEFAULT_CONFIG_${PLATFORM}}) && \
+    echo "${DEFAULT_CFG}" > /app/.default-config
+# Compose files override CMD; without compose, entrypoint reads .default-config

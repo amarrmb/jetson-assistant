@@ -7,11 +7,12 @@ logger = logging.getLogger(__name__)
 
 
 class JetsonTier(Enum):
-    """Jetson hardware tiers with associated config and compose files."""
+    """Hardware tiers with associated config and compose files."""
 
     THOR = "thor"
     ORIN = "orin"
     NANO = "nano"
+    SPARK = "spark"
 
     @property
     def config(self) -> str:
@@ -54,13 +55,30 @@ def get_vram_gb() -> float:
     return 0.0
 
 
-def detect_tier(vram_gb: float = None) -> JetsonTier:
-    """Select hardware tier based on available VRAM.
+def _get_gpu_capability() -> tuple[int, int] | None:
+    """Get GPU compute capability (major, minor). Returns None if unavailable."""
+    try:
+        import torch
 
-    Thresholds:
-      - >= 96 GB  -> THOR  (Jetson Thor, 128GB unified)
-      - >= 16 GB  -> ORIN  (AGX Orin 32-64GB)
-      - <  16 GB  -> NANO  (Orin Nano 8GB)
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_capability(0)
+    except Exception:
+        pass
+    return None
+
+
+def detect_tier(vram_gb: float = None) -> JetsonTier:
+    """Select hardware tier based on GPU compute capability and VRAM.
+
+    Detection strategy:
+      1. GPU compute capability distinguishes architecture family:
+         - sm_120+ (>= 12.0) -> SPARK  (DGX Spark, Blackwell GB10)
+         - sm_100+ (>= 10.0) -> THOR   (Jetson Thor)
+         - sm_87   (== 8.7)  -> ORIN/NANO (differentiated by VRAM)
+      2. VRAM thresholds as fallback when capability unavailable:
+         - >= 96 GB  -> THOR
+         - >= 16 GB  -> ORIN
+         - <  16 GB  -> NANO
 
     Args:
         vram_gb: GPU/unified memory in GB. If None, auto-detected via get_vram_gb().
@@ -71,12 +89,30 @@ def detect_tier(vram_gb: float = None) -> JetsonTier:
     if vram_gb is None:
         vram_gb = get_vram_gb()
 
-    if vram_gb >= 96:
-        tier = JetsonTier.THOR
-    elif vram_gb >= 16:
-        tier = JetsonTier.ORIN
-    else:
-        tier = JetsonTier.NANO
+    cap = _get_gpu_capability()
 
-    logger.info("Detected %.0fGB VRAM -> %s tier", vram_gb, tier.value)
+    if cap is not None:
+        major, minor = cap
+        if major >= 12:
+            tier = JetsonTier.SPARK
+        elif major >= 10:
+            tier = JetsonTier.THOR
+        elif vram_gb >= 16:
+            tier = JetsonTier.ORIN
+        else:
+            tier = JetsonTier.NANO
+        logger.info(
+            "Detected sm_%d%d, %.0fGB VRAM -> %s tier",
+            major, minor, vram_gb, tier.value,
+        )
+    else:
+        # Fallback: VRAM-only detection (no torch or no GPU)
+        if vram_gb >= 96:
+            tier = JetsonTier.THOR
+        elif vram_gb >= 16:
+            tier = JetsonTier.ORIN
+        else:
+            tier = JetsonTier.NANO
+        logger.info("Detected %.0fGB VRAM -> %s tier (no GPU capability info)", vram_gb, tier.value)
+
     return tier

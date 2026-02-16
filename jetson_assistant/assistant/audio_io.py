@@ -21,6 +21,28 @@ logger = logging.getLogger(__name__)
 import numpy as np
 
 
+def _find_alsa_capture_hw() -> Optional[str]:
+    """Find an ALSA capture hardware device via ``arecord -l``.
+
+    This is a fallback for when PortAudio does not enumerate USB audio devices
+    (common in Docker on aarch64). Returns a device string like ``"hw:1,0"``
+    that can be passed directly to ``sounddevice.InputStream(device=...)``.
+    """
+    try:
+        import re
+        import subprocess
+        result = subprocess.run(
+            ["arecord", "-l"], capture_output=True, text=True, timeout=5,
+        )
+        # e.g. "card 1: Webcam [C922 ...], device 0: USB Audio [USB Audio]"
+        m = re.search(r"card\s+(\d+):.*,\s*device\s+(\d+):", result.stdout)
+        if m:
+            return f"hw:{m.group(1)},{m.group(2)}"
+    except Exception:
+        pass
+    return None
+
+
 def _find_usb_audio_device(kind: str = "input") -> Optional[int]:
     """Auto-detect a USB audio device, preferring devices with both input and output.
 
@@ -268,11 +290,22 @@ class AudioInput:
         # default to the USB device. In that case, device=None (ALSA default) is
         # correct — don't override it with PortAudio device scanning, which may
         # return the wrong device due to enumeration bugs in Docker on Jetson.
+        self._use_arecord = False  # fallback flag
         if device is None:
             import pathlib
             has_asoundrc = pathlib.Path("/root/.asoundrc").exists()
             if has_asoundrc:
                 logger.info("Using ALSA default device (configured by docker-entrypoint)")
+                # PortAudio may not enumerate USB devices even when ALSA sees
+                # them. Check if PortAudio has any input device at all.
+                try:
+                    sd.query_devices(kind="input")
+                except Exception:
+                    hw = _find_alsa_capture_hw()
+                    if hw is not None:
+                        logger.info("PortAudio has no input; will use arecord fallback on %s", hw)
+                        self._use_arecord = True
+                        self._arecord_device = hw
             else:
                 device = _find_usb_audio_device(kind="input")
                 if device is not None:
@@ -280,13 +313,18 @@ class AudioInput:
                                 device, sd.query_devices(device)["name"])
         self.device = device
 
-        # Get device info for logging
-        if self.device is None:
-            device_info = sd.query_devices(kind="input")
+        # Log selected device (non-fatal if query fails)
+        if self._use_arecord:
+            logger.info("Audio input: %s (arecord)", self._arecord_device)
         else:
-            device_info = sd.query_devices(self.device)
-
-        logger.info("Audio input: %s", device_info['name'])
+            try:
+                if self.device is None:
+                    device_info = sd.query_devices(kind="input")
+                else:
+                    device_info = sd.query_devices(self.device)
+                logger.info("Audio input: %s", device_info['name'])
+            except Exception:
+                logger.info("Audio input: %s", self.device or "ALSA default")
 
     def start(self, callback: Callable[[np.ndarray], None]) -> None:
         """
@@ -301,19 +339,72 @@ class AudioInput:
         self._callback = callback
         self._running = True
 
-        # Use larger buffer to prevent overflow
-        # blocksize=0 lets PortAudio choose optimal size
-        # extra_settings for even larger ALSA buffer
-        self._stream = self._sd.InputStream(
-            samplerate=self.config.sample_rate,
-            channels=self.config.channels,
-            dtype=self.config.dtype,
-            blocksize=self.config.chunk_size * 2,  # Double chunk size
-            device=self.device,
-            callback=self._audio_callback,
-            latency=0.5,  # 500ms latency for large buffer
+        if self._use_arecord:
+            self._start_arecord()
+        else:
+            # Use larger buffer to prevent overflow
+            # blocksize=0 lets PortAudio choose optimal size
+            # extra_settings for even larger ALSA buffer
+            self._stream = self._sd.InputStream(
+                samplerate=self.config.sample_rate,
+                channels=self.config.channels,
+                dtype=self.config.dtype,
+                blocksize=self.config.chunk_size * 2,  # Double chunk size
+                device=self.device,
+                callback=self._audio_callback,
+                latency=0.5,  # 500ms latency for large buffer
+            )
+            self._stream.start()
+
+    def _start_arecord(self) -> None:
+        """Start audio capture via arecord subprocess (PortAudio fallback)."""
+        import subprocess
+        import threading
+
+        rate = int(self.config.sample_rate)
+        device = getattr(self, '_arecord_device', 'default')
+        cmd = [
+            "arecord", "-D", device, "-f", "S16_LE",
+            "-r", str(rate), "-c", "1", "-t", "raw", "-q",
+        ]
+        logger.info("Starting arecord: %s", " ".join(cmd))
+        self._arecord_proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        self._stream.start()
+        self._arecord_thread = threading.Thread(
+            target=self._arecord_reader, daemon=True,
+        )
+        self._arecord_thread.start()
+
+    def _arecord_reader(self) -> None:
+        """Read raw PCM from arecord and feed to callback as float32 chunks."""
+        import struct
+        proc = self._arecord_proc
+        chunk_bytes = self.config.chunk_size * 2  # S16_LE = 2 bytes/sample
+
+        # Check if arecord died immediately
+        import time
+        time.sleep(0.2)
+        if proc.poll() is not None:
+            stderr = proc.stderr.read().decode(errors="replace").strip()
+            logger.error("arecord exited immediately (code %d): %s", proc.returncode, stderr)
+            return
+
+        logger.info("arecord capture started (pid %d)", proc.pid)
+        while self._running and proc.poll() is None:
+            data = proc.stdout.read(chunk_bytes)
+            if not data:
+                break
+            # Convert S16_LE to float32 [-1, 1]
+            n_samples = len(data) // 2
+            samples = struct.unpack(f"<{n_samples}h", data[:n_samples * 2])
+            audio = np.array(samples, dtype=np.float32) / 32768.0
+            if self._callback and self._running:
+                self._callback(audio)
+
+        if proc.poll() is not None and proc.returncode != 0:
+            stderr = proc.stderr.read().decode(errors="replace").strip()
+            logger.error("arecord died (code %d): %s", proc.returncode, stderr)
 
     def _audio_callback(self, indata, frames, time_info, status):
         """Internal callback from sounddevice."""
@@ -328,7 +419,13 @@ class AudioInput:
     def stop(self) -> None:
         """Stop audio capture."""
         self._running = False
-        if self._stream:
+        if self._use_arecord:
+            proc = getattr(self, '_arecord_proc', None)
+            if proc:
+                proc.terminate()
+                proc.wait(timeout=3)
+                self._arecord_proc = None
+        elif self._stream:
             self._stream.stop()
             self._stream.close()
             self._stream = None

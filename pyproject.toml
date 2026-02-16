@@ -67,6 +67,7 @@ sensevoice = [
 ]
 nemotron = [
     "nemo_toolkit[asr]>=2.0.0,<2.6.2",  # 2.6.2 has CUDA stream capture bug on Jetson
+    "lhotse<1.31",  # 1.31+ breaks NeMo's DynamicCutSampler __init__ signature
 ]
 
 # UI & tools

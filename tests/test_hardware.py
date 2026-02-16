@@ -17,54 +17,90 @@ class TestJetsonTier:
         assert JetsonTier.THOR.value == "thor"
         assert JetsonTier.ORIN.value == "orin"
         assert JetsonTier.NANO.value == "nano"
+        assert JetsonTier.SPARK.value == "spark"
 
     def test_tier_has_config_path(self):
         assert JetsonTier.THOR.config == "configs/thor.yaml"
         assert JetsonTier.ORIN.config == "configs/orin.yaml"
         assert JetsonTier.NANO.config == "configs/nano.yaml"
+        assert JetsonTier.SPARK.config == "configs/spark.yaml"
 
     def test_tier_has_compose_file(self):
         assert JetsonTier.THOR.compose == "docker-compose.thor.yml"
         assert JetsonTier.ORIN.compose == "docker-compose.orin.yml"
         assert JetsonTier.NANO.compose == "docker-compose.nano.yml"
+        assert JetsonTier.SPARK.compose == "docker-compose.spark.yml"
 
 
 # ---------------------------------------------------------------------------
-# detect_tier() — VRAM-based tier selection
+# detect_tier() — GPU capability + VRAM-based tier selection
 # ---------------------------------------------------------------------------
 
+NO_GPU_CAP = patch("jetson_assistant.hardware._get_gpu_capability", return_value=None)
 
-class TestDetectTier:
+
+class TestDetectTierByCapability:
+    """When GPU compute capability is available, it takes priority."""
+
+    def test_blackwell_maps_to_spark(self):
+        """sm_120+ (Blackwell GB10) -> SPARK."""
+        with patch("jetson_assistant.hardware._get_gpu_capability", return_value=(12, 1)):
+            assert detect_tier(vram_gb=128) == JetsonTier.SPARK
+
+    def test_thor_soc_maps_to_thor(self):
+        """sm_110 (Thor SoC) -> THOR."""
+        with patch("jetson_assistant.hardware._get_gpu_capability", return_value=(11, 0)):
+            assert detect_tier(vram_gb=128) == JetsonTier.THOR
+
+    def test_orin_with_high_vram(self):
+        """sm_87 + >=16GB -> ORIN."""
+        with patch("jetson_assistant.hardware._get_gpu_capability", return_value=(8, 7)):
+            assert detect_tier(vram_gb=64) == JetsonTier.ORIN
+
+    def test_orin_with_low_vram_maps_to_nano(self):
+        """sm_87 + <16GB -> NANO."""
+        with patch("jetson_assistant.hardware._get_gpu_capability", return_value=(8, 7)):
+            assert detect_tier(vram_gb=8) == JetsonTier.NANO
+
+
+class TestDetectTierByVram:
+    """Fallback: when GPU capability is unavailable, use VRAM thresholds."""
+
     def test_detect_tier_thor(self):
         """>=96GB maps to THOR."""
-        assert detect_tier(vram_gb=128) == JetsonTier.THOR
-        assert detect_tier(vram_gb=96) == JetsonTier.THOR
+        with NO_GPU_CAP:
+            assert detect_tier(vram_gb=128) == JetsonTier.THOR
+            assert detect_tier(vram_gb=96) == JetsonTier.THOR
 
     def test_detect_tier_orin(self):
         """>=16GB and <96GB maps to ORIN."""
-        assert detect_tier(vram_gb=64) == JetsonTier.ORIN
-        assert detect_tier(vram_gb=32) == JetsonTier.ORIN
-        assert detect_tier(vram_gb=16) == JetsonTier.ORIN
+        with NO_GPU_CAP:
+            assert detect_tier(vram_gb=64) == JetsonTier.ORIN
+            assert detect_tier(vram_gb=32) == JetsonTier.ORIN
+            assert detect_tier(vram_gb=16) == JetsonTier.ORIN
 
     def test_detect_tier_nano(self):
         """<16GB maps to NANO."""
-        assert detect_tier(vram_gb=8) == JetsonTier.NANO
-        assert detect_tier(vram_gb=4) == JetsonTier.NANO
+        with NO_GPU_CAP:
+            assert detect_tier(vram_gb=8) == JetsonTier.NANO
+            assert detect_tier(vram_gb=4) == JetsonTier.NANO
 
     def test_detect_tier_zero_vram(self):
         """0 VRAM falls to NANO."""
-        assert detect_tier(vram_gb=0) == JetsonTier.NANO
+        with NO_GPU_CAP:
+            assert detect_tier(vram_gb=0) == JetsonTier.NANO
 
     def test_detect_tier_boundary_values(self):
         """Exact boundary values."""
-        assert detect_tier(vram_gb=95.9) == JetsonTier.ORIN
-        assert detect_tier(vram_gb=96.0) == JetsonTier.THOR
-        assert detect_tier(vram_gb=15.9) == JetsonTier.NANO
-        assert detect_tier(vram_gb=16.0) == JetsonTier.ORIN
+        with NO_GPU_CAP:
+            assert detect_tier(vram_gb=95.9) == JetsonTier.ORIN
+            assert detect_tier(vram_gb=96.0) == JetsonTier.THOR
+            assert detect_tier(vram_gb=15.9) == JetsonTier.NANO
+            assert detect_tier(vram_gb=16.0) == JetsonTier.ORIN
 
     def test_detect_tier_auto_calls_get_vram(self):
         """When vram_gb is None, detect_tier calls get_vram_gb()."""
-        with patch("jetson_assistant.hardware.get_vram_gb", return_value=64.0) as mock:
+        with NO_GPU_CAP, patch("jetson_assistant.hardware.get_vram_gb", return_value=64.0) as mock:
             tier = detect_tier()
             mock.assert_called_once()
             assert tier == JetsonTier.ORIN

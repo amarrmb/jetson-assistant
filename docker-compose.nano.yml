@@ -1,0 +1,80 @@
+# Jetson Orin Nano — Functional UX, Text Only
+# Ollama 1.5B + Piper TTS + Whisper STT (8GB unified memory)
+#
+# Usage: docker compose -f docker-compose.nano.yml up -d
+#
+# First run — pull the model (only needed once):
+#   docker exec assistant-ollama ollama pull qwen2.5:1.5b
+#
+# Audio options (same as Thor/Orin):
+#   # Auto-detect USB audio (default)
+#   docker compose -f docker-compose.nano.yml up -d
+#
+#   # PipeWire passthrough (Bluetooth + system defaults)
+#   AUDIO_UID=$(id -u) docker compose -f docker-compose.nano.yml up -d
+#
+# Build locally (requires JetPack 6.x host):
+#   docker compose -f docker-compose.nano.yml build
+#
+# Check readiness:
+#   curl http://localhost:11434/api/tags
+
+x-common: &common
+  runtime: nvidia
+  network_mode: host
+  ipc: host
+  restart: unless-stopped
+  ulimits:
+    memlock: -1
+    stack: 67108864
+
+volumes:
+  hf-cache:
+  ollama-models:
+
+services:
+  ollama:
+    <<: *common
+    image: ollama/ollama
+    container_name: assistant-ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  assistant:
+    <<: *common
+    image: ghcr.io/amarrmb/jetson-assistant:nano
+    build:
+      context: .
+      args:
+        PLATFORM: nano
+    container_name: assistant
+    devices:
+      - /dev/snd
+    device_cgroup_rules:
+      - 'c 81:* rmw'
+    volumes:
+      - /dev:/dev
+      - hf-cache:/root/.cache/huggingface
+      - /usr/lib/aarch64-linux-gnu:/host-libs:ro
+      - /usr/local/cuda:/usr/local/cuda:ro
+      # PipeWire passthrough (optional — enables Bluetooth + system defaults)
+      # Set AUDIO_UID to your user ID to enable, or omit for ALSA-only mode
+      - /run/user/${AUDIO_UID:-65534}:/run/user/${AUDIO_UID:-65534}
+    environment:
+      - TORCH_COMPILE_DISABLE=1
+      - LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/host-libs:/usr/local/cuda/lib64:/usr/local/cuda/compat
+      - ALSA_CARD=${ALSA_CARD:-}  # Optional: auto-detected if empty
+      # XDG_RUNTIME_DIR is required for PipeWire passthrough (Tier 1).
+      - XDG_RUNTIME_DIR=/run/user/${AUDIO_UID:-65534}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    command: ["assistant", "--config", "configs/nano.yaml"]

@@ -176,4 +176,11 @@ fi
 
 # ── Start the assistant ───────────────────────────────────────────────────
 
-exec jetson-assistant "$@"
+if [ $# -eq 0 ]; then
+    # No arguments — use platform default config (written at build time)
+    DEFAULT_CFG=$(cat /app/.default-config 2>/dev/null || echo "configs/thor-sota.yaml")
+    echo "Using default config: ${DEFAULT_CFG}"
+    exec jetson-assistant assistant --config "$DEFAULT_CFG"
+else
+    exec jetson-assistant "$@"
+fi

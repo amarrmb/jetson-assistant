@@ -1,0 +1,85 @@
+# Jetson AGX Orin — Natural UX, Vision Capable
+# 3B VLM + Kokoro TTS + Nemotron STT (32-64GB unified memory)
+#
+# Usage: docker compose -f docker-compose.orin.yml up -d
+#
+# Audio options (same as Thor):
+#   # Auto-detect USB audio (default)
+#   docker compose -f docker-compose.orin.yml up -d
+#
+#   # PipeWire passthrough (Bluetooth + system defaults)
+#   AUDIO_UID=$(id -u) docker compose -f docker-compose.orin.yml up -d
+#
+#   # Manual card override
+#   ALSA_CARD=USB docker compose -f docker-compose.orin.yml up -d
+#
+# Build locally (requires JetPack 6.x host):
+#   docker compose -f docker-compose.orin.yml build
+#
+# Check readiness:
+#   curl http://localhost:8001/v1/models
+
+x-common: &common
+  runtime: nvidia
+  network_mode: host
+  ipc: host
+  restart: unless-stopped
+  ulimits:
+    memlock: -1
+    stack: 67108864
+
+volumes:
+  hf-cache:
+
+services:
+  vllm:
+    <<: *common
+    image: ghcr.io/nvidia-ai-iot/vllm:latest-jetson-orin
+    container_name: assistant-vllm
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    command: >
+      vllm serve Qwen/Qwen2.5-VL-3B-Instruct
+      --host 0.0.0.0 --port 8001
+      --max-model-len 4096
+      --gpu-memory-utilization 0.3
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/v1/models"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 300s
+
+  assistant:
+    <<: *common
+    image: ghcr.io/amarrmb/jetson-assistant:orin
+    build:
+      context: .
+      args:
+        PLATFORM: orin
+    container_name: assistant
+    devices:
+      - /dev/snd
+    device_cgroup_rules:
+      - 'c 81:* rmw'
+    volumes:
+      - /dev:/dev
+      - hf-cache:/root/.cache/huggingface
+      - /usr/lib/aarch64-linux-gnu:/host-libs:ro
+      - /usr/local/cuda:/usr/local/cuda:ro
+      # PipeWire passthrough (optional — enables Bluetooth + system defaults)
+      # Set AUDIO_UID to your user ID to enable, or omit for ALSA-only mode
+      - /run/user/${AUDIO_UID:-65534}:/run/user/${AUDIO_UID:-65534}
+    environment:
+      - TORCH_COMPILE_DISABLE=1
+      - LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/host-libs:/usr/local/cuda/lib64:/usr/local/cuda/compat
+      - ALSA_CARD=${ALSA_CARD:-}  # Optional: auto-detected if empty
+      # XDG_RUNTIME_DIR is required for PipeWire passthrough (Tier 1).
+      # When AUDIO_UID is set, this tells the pipewire-alsa plugin where to
+      # find the PipeWire socket. When AUDIO_UID is unset (65534/nobody),
+      # no PipeWire socket exists and Tier 2 (ALSA USB) takes over.
+      - XDG_RUNTIME_DIR=/run/user/${AUDIO_UID:-65534}
+    depends_on:
+      vllm:
+        condition: service_healthy
+    command: ["assistant", "--config", "configs/orin.yaml"]

@@ -66,7 +66,17 @@ class NemotronBackend(STTBackend):
         if device == "auto":
             try:
                 import torch
-                device = "cuda" if torch.cuda.is_available() else "cpu"
+                if torch.cuda.is_available():
+                    cap = torch.cuda.get_device_capability(0)
+                    if cap[0] >= 12:
+                        # Blackwell GPUs (sm_12.1+) trigger cuBLAS errors with
+                        # the pip PyTorch build (max supported sm_12.0). Use CPU.
+                        device = "cpu"
+                        logger.info("Blackwell GPU (sm_%d.%d) — using CPU for Nemotron STT", *cap)
+                    else:
+                        device = "cuda"
+                else:
+                    device = "cpu"
             except ImportError:
                 device = "cpu"
             self._device = device
