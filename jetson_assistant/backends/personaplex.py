@@ -261,6 +261,8 @@ class PersonaplexBackend:
 
                 async def opus_loop():
                     all_pcm_data = None
+                    _frame_count = 0
+                    _profile_interval = 50  # log every 50 frames
 
                     while not close:
                         await asyncio.sleep(0.001)
@@ -273,21 +275,56 @@ class PersonaplexBackend:
                             all_pcm_data = np.concatenate((all_pcm_data, pcm))
 
                         while all_pcm_data is not None and all_pcm_data.shape[-1] >= self._frame_size:
+                            _frame_count += 1
+                            _do_log = (_frame_count % _profile_interval == 1)
+                            _t0 = time.time()
+
                             chunk = all_pcm_data[:self._frame_size]
                             all_pcm_data = all_pcm_data[self._frame_size:]
                             if all_pcm_data.shape[-1] == 0:
                                 all_pcm_data = None
 
                             chunk_t = torch.from_numpy(chunk).to(device=self._device, dtype=torch.float16)[None, None]
+
+                            if _do_log:
+                                torch.cuda.synchronize()
+                                _t1 = time.time()
+
                             codes = self._mimi.encode(chunk_t)
 
+                            if _do_log:
+                                torch.cuda.synchronize()
+                                _t2 = time.time()
+
+                            _step_total = 0.0
+                            _decode_total = 0.0
                             for c in range(codes.shape[-1]):
+                                if _do_log:
+                                    torch.cuda.synchronize()
+                                    _ts0 = time.time()
+
                                 tokens = self._lm_gen.step(codes[:, :, c:c + 1])
+
+                                if _do_log:
+                                    torch.cuda.synchronize()
+                                    _ts1 = time.time()
+                                    _step_total += (_ts1 - _ts0)
+
                                 if tokens is None:
                                     continue
 
+                                if _do_log:
+                                    torch.cuda.synchronize()
+                                    _td0 = time.time()
+
                                 # Decode audio
                                 main_pcm = self._mimi.decode(tokens[:, 1:9])
+
+                                if _do_log:
+                                    torch.cuda.synchronize()
+                                    _td1 = time.time()
+                                    _decode_total += (_td1 - _td0)
+
                                 main_pcm = main_pcm.float()
                                 self._pinned_pcm.copy_(main_pcm[0, 0], non_blocking=True)
                                 torch.cuda.current_stream().synchronize()
@@ -318,6 +355,16 @@ class PersonaplexBackend:
                                     # Send text to browser
                                     msg = b"\x02" + bytes(_text, encoding="utf8")
                                     await ws.send_bytes(msg)
+
+                            _t3 = time.time()
+                            _total_ms = (_t3 - _t0) * 1000
+                            if _do_log:
+                                _prep_ms = (_t1 - _t0) * 1000
+                                _encode_ms = (_t2 - _t1) * 1000
+                                _step_ms = _step_total * 1000
+                                _dec_ms = _decode_total * 1000
+                                _other_ms = _total_ms - _prep_ms - _encode_ms - _step_ms - _dec_ms
+                                print(f"PROFILE frame={_frame_count} total={_total_ms:.1f}ms | prep={_prep_ms:.1f} encode={_encode_ms:.1f} lm_step={_step_ms:.1f} decode={_dec_ms:.1f} other={_other_ms:.1f}", flush=True)
 
                     tool_parser.flush()
 
