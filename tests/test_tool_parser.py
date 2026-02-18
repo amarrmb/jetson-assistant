@@ -106,3 +106,67 @@ def test_unknown_tool_ignored():
     parser.flush()
     assert tools == []
     assert "[fly away]" in "".join(texts)
+
+
+def test_tool_parsing_search():
+    """[search who won the superbowl] → web_search(query='who won the superbowl')."""
+    tools = []
+    parser = ToolParser(on_text=lambda t: None, on_tool=tools.append)
+    parser.feed("[search who won the superbowl]")
+    parser.flush()
+    assert len(tools) == 1
+    assert tools[0]["name"] == "web_search"
+    assert tools[0]["args"] == {"query": "who won the superbowl"}
+
+
+def test_tool_parsing_web_search():
+    """[web_search latest AI news] → web_search(query='latest AI news')."""
+    tools = []
+    parser = ToolParser(on_text=lambda t: None, on_tool=tools.append)
+    parser.feed("[web_search latest AI news]")
+    parser.flush()
+    assert len(tools) == 1
+    assert tools[0]["name"] == "web_search"
+    assert tools[0]["args"] == {"query": "latest AI news"}
+
+
+def test_tool_parsing_search_default():
+    """[search] with no arg should default to 'latest news'."""
+    tools = []
+    parser = ToolParser(on_text=lambda t: None, on_tool=tools.append)
+    parser.feed("[search]")
+    parser.flush()
+    assert tools[0]["name"] == "web_search"
+    assert tools[0]["args"] == {"query": "latest news"}
+
+
+def test_tool_parsing_camera():
+    """[camera what do you see] → check_camera(question='what do you see')."""
+    tools = []
+    parser = ToolParser(on_text=lambda t: None, on_tool=tools.append)
+    parser.feed("[camera what do you see]")
+    parser.flush()
+    assert len(tools) == 1
+    assert tools[0]["name"] == "check_camera"
+    assert tools[0]["args"] == {"question": "what do you see"}
+
+
+def test_tool_parsing_see():
+    """[see what's on the table] → check_camera(question="what's on the table")."""
+    tools = []
+    parser = ToolParser(on_text=lambda t: None, on_tool=tools.append)
+    parser.feed("[see what's on the table]")
+    parser.flush()
+    assert len(tools) == 1
+    assert tools[0]["name"] == "check_camera"
+    assert tools[0]["args"] == {"question": "what's on the table"}
+
+
+def test_tool_parsing_describe():
+    """[describe] with no arg should default to 'Describe what you see'."""
+    tools = []
+    parser = ToolParser(on_text=lambda t: None, on_tool=tools.append)
+    parser.feed("[describe]")
+    parser.flush()
+    assert tools[0]["name"] == "check_camera"
+    assert tools[0]["args"] == {"question": "Describe what you see"}

@@ -17,6 +17,13 @@ _TOOL_MAP = {
     "set_antennas": None,  # special handling
     "look_at_point": None,  # special handling
     "reachy_status": ("reachy_status", None, None),
+    # Web search
+    "search": ("web_search", "query", "latest news"),
+    "web_search": ("web_search", "query", "latest news"),
+    # Camera vision
+    "camera": ("check_camera", "question", "Describe what you see"),
+    "see": ("check_camera", "question", "Describe what you see"),
+    "describe": ("check_camera", "question", "Describe what you see"),
 }
 
 

@@ -7,11 +7,20 @@ personaplex_port: 8998
 personaplex_ssl_dir: ~/personaplex-ssl
 personaplex_voice: NATF1
 personaplex_text_prompt: >
-  You enjoy having a good conversation. You are curious about the world
-  and enjoy learning new things. Have a natural, friendly conversation.
+  You are a helpful voice assistant running on NVIDIA Jetson Thor.
+  You can use tools by saying them in brackets:
+  [search your query] - Search the web for current information
+  [camera what to look for] - Look through the camera and describe what you see
+  When asked factual questions, current events, or "who won", use [search ...].
+  When asked "what do you see" or about the camera, use [camera ...].
+  Use tools naturally in conversation. Example: "Let me look that up. [search who won the superbowl 2026]"
+  Have natural, friendly conversations. Keep responses concise.
 personaplex_tool_detection: prompt
 personaplex_dir: ~/personaplex
 personaplex_cpu_cores: "4-13"
+
+# Transcript page served from PersonaPlex aiohttp (not VisionPreview)
+stream_vision_port: 0
 
 # VLM for vision tools (optional — requires vLLM container running)
 llm_backend: vllm
