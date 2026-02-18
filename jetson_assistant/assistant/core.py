@@ -366,6 +366,14 @@ class VoiceAssistant:
         self.config = config or AssistantConfig()
         self.state = AssistantState.IDLE
 
+        # PersonaPlex mode — minimal init (backend handles audio/model)
+        if self.config.mode == "personaplex":
+            self._external_tool_modules: list = []
+            self._init_tools_personaplex()
+            self._running = False
+            logger.info("Voice assistant initialized (PersonaPlex mode)")
+            return
+
         # Initialize engine (remote or local)
         if self.config.use_server or engine is None:
             self._init_remote_engine()
@@ -883,6 +891,30 @@ class VoiceAssistant:
             import importlib
 
             ext_context = {"llm": self.llm, "camera_pool": self._camera_pool, "say": self.say}
+            for module_path in self.config.external_tools:
+                try:
+                    mod = importlib.import_module(module_path)
+                    mod.register_tools(self._tools, ext_context)
+                    self._external_tool_modules.append(mod)
+                    logger.info("Loaded external tools from %s", module_path)
+                except Exception as e:
+                    logger.error("Failed to load external tools from %s: %s", module_path, e)
+
+    def _init_tools_personaplex(self) -> None:
+        """Register tools for PersonaPlex mode (external plugins only).
+
+        In PersonaPlex mode, builtin tools (timers, camera, etc.) aren't used
+        because there's no LLM function-calling pipeline. Only external tool
+        plugins (e.g., reachy_tools) are loaded for bracket-based dispatch.
+        """
+        from jetson_assistant.assistant.tools import ToolRegistry
+
+        self._tools = ToolRegistry()
+
+        if self.config.external_tools:
+            import importlib
+
+            ext_context = {"llm": None, "camera_pool": None, "say": lambda text: None}
             for module_path in self.config.external_tools:
                 try:
                     mod = importlib.import_module(module_path)
