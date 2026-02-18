@@ -4,6 +4,7 @@ import asyncio
 import json as _json
 import logging
 import os
+import queue
 import sys
 import time
 import threading
@@ -191,6 +192,50 @@ class PersonaplexBackend:
 
     def is_loaded(self) -> bool:
         return self._loaded
+
+    def _synthesize_tts(self, text: str, target_rate: int = 24000) -> Optional[np.ndarray]:
+        """Generate speech from text using edge-tts. Returns float32 mono PCM at target_rate.
+
+        Called from tool executor thread. Uses Microsoft Edge TTS (free, high quality).
+        """
+        try:
+            import edge_tts
+            import miniaudio
+
+            async def _generate():
+                communicate = edge_tts.Communicate(text, "en-US-GuyNeural")
+                audio_bytes = b""
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        audio_bytes += chunk["data"]
+                return audio_bytes
+
+            # Run async TTS in a new event loop (we're in a thread)
+            tts_loop = asyncio.new_event_loop()
+            try:
+                mp3_bytes = tts_loop.run_until_complete(_generate())
+            finally:
+                tts_loop.close()
+
+            if not mp3_bytes:
+                logger.warning("TTS returned empty audio")
+                return None
+
+            # Decode MP3 → float32 mono at target sample rate (miniaudio handles resampling)
+            decoded = miniaudio.decode(
+                mp3_bytes,
+                output_format=miniaudio.SampleFormat.FLOAT32,
+                nchannels=1,
+                sample_rate=target_rate,
+            )
+            pcm = np.frombuffer(decoded.samples, dtype=np.float32).copy()
+            logger.info("TTS synthesized: %d samples (%.1fs) at %dHz",
+                        len(pcm), len(pcm) / target_rate, target_rate)
+            return pcm
+
+        except Exception as e:
+            logger.error("TTS synthesis failed: %s", e)
+            return None
 
     def set_callbacks(
         self,
@@ -448,14 +493,20 @@ class PersonaplexBackend:
                 if not ws.closed:
                     await ws.send_bytes(b"\x00")
 
-                # Tool execution helper (shared by bracket parser + keyword detector)
+                # Audio ducking state — mutes model audio while TTS speaks tool results
                 loop = asyncio.get_event_loop()
+                audio_muted = threading.Event()
+                tts_pcm_queue = queue.Queue()
 
                 def _execute_tool(name, args):
-                    """Add tool to transcript and execute async. Send result to browser UI."""
+                    """Mute model, execute tool, speak result via TTS, unmute."""
                     tool_id = backend.add_tool_call(name, args)
                     if self._tool_registry:
                         def _run_tool():
+                            # Mute model audio immediately
+                            audio_muted.set()
+                            logger.info("Audio muted for tool: %s(%s)", name, args)
+
                             class _TC:
                                 def __init__(self, n, a):
                                     self.name = n
@@ -467,15 +518,25 @@ class PersonaplexBackend:
                                 result_str = f"Error: {e}"
                             backend.add_tool_result(tool_id, result_str)
                             logger.info("Tool %s -> %s", name, result_str[:100])
-                            # Send result to browser as visual notification
-                            # 0x03 prefix = tool result message
+
+                            # Synthesize TTS of result and queue for playback
+                            tts_text = result_str[:250]
+                            tts_pcm = backend._synthesize_tts(
+                                tts_text,
+                                target_rate=int(self._mimi.sample_rate),
+                            )
+                            if tts_pcm is not None:
+                                tts_pcm_queue.put(tts_pcm)
+                            else:
+                                # TTS failed — unmute so model audio resumes
+                                audio_muted.clear()
+                                logger.warning("TTS failed, unmuting immediately")
+
+                            # Also send visual notification to browser
                             try:
-                                import json
-                                msg_data = json.dumps({"tool": name, "result": result_str[:300]})
+                                msg_data = _json.dumps({"tool": name, "result": result_str[:300]})
                                 msg = b"\x03" + bytes(msg_data, encoding="utf8")
-                                asyncio.run_coroutine_threadsafe(
-                                    ws.send_bytes(msg), loop
-                                )
+                                asyncio.run_coroutine_threadsafe(ws.send_bytes(msg), loop)
                             except Exception as e:
                                 logger.warning("Failed to send tool result to browser: %s", e)
                         self._tool_executor.submit(_run_tool)
@@ -525,6 +586,24 @@ class PersonaplexBackend:
 
                     while not close:
                         await asyncio.sleep(0.001)
+
+                        # Drain TTS queue — play tool result audio instead of model
+                        try:
+                            tts_audio = tts_pcm_queue.get_nowait()
+                            if tts_audio is not None:
+                                logger.info("Playing TTS: %d samples (%.1fs)",
+                                            len(tts_audio), len(tts_audio) / self._mimi.sample_rate)
+                                # Feed TTS audio in frame-sized chunks through opus
+                                for i in range(0, len(tts_audio), self._frame_size):
+                                    chunk = tts_audio[i:i + self._frame_size]
+                                    if len(chunk) < self._frame_size:
+                                        chunk = np.pad(chunk, (0, self._frame_size - len(chunk)))
+                                    opus_writer.append_pcm(chunk)
+                                audio_muted.clear()
+                                logger.info("TTS playback complete, unmuted")
+                        except queue.Empty:
+                            pass
+
                         pcm = opus_reader.read_pcm()
                         if pcm.shape[-1] == 0:
                             continue
@@ -602,8 +681,9 @@ class PersonaplexBackend:
                                 else:
                                     self._set_state("listening")
 
-                                # Send audio back to browser
-                                opus_writer.append_pcm(pcm_np)
+                                # Send audio back to browser (skip when muted for TTS override)
+                                if not audio_muted.is_set():
+                                    opus_writer.append_pcm(pcm_np)
 
                                 # Parse text token for tools + transcript
                                 text_token = tokens[0, 0, 0].item()
@@ -792,13 +872,19 @@ class PersonaplexBackend:
         # Audio I/O at Mimi's sample rate (24kHz)
         audio_out = AudioOutput(sample_rate=self._mimi.sample_rate)
 
-        # Tool execution helper
+        # Audio ducking state for local mode
         backend = self
+        audio_muted = threading.Event()
+        tts_pcm_queue = queue.Queue()
 
         def _execute_tool(name, args):
+            """Mute model, execute tool, speak result via TTS, unmute."""
             tool_id = backend.add_tool_call(name, args)
             if self._tool_registry:
                 def _run_tool():
+                    audio_muted.set()
+                    logger.info("Audio muted for tool: %s(%s)", name, args)
+
                     class _TC:
                         def __init__(self, n, a):
                             self.name = n
@@ -810,6 +896,16 @@ class PersonaplexBackend:
                         result_str = f"Error: {e}"
                     backend.add_tool_result(tool_id, result_str)
                     logger.info("Tool %s -> %s", name, result_str[:100])
+
+                    # Synthesize TTS and queue for playback
+                    tts_pcm = backend._synthesize_tts(
+                        result_str[:250],
+                        target_rate=int(self._mimi.sample_rate),
+                    )
+                    if tts_pcm is not None:
+                        tts_pcm_queue.put(tts_pcm)
+                    else:
+                        audio_muted.clear()
                 self._tool_executor.submit(_run_tool)
             else:
                 backend.add_tool_result(tool_id, "No tool registry configured")
@@ -881,9 +977,23 @@ class PersonaplexBackend:
 
                         pcm_np = self._pinned_pcm.detach().numpy().copy()
 
-                        # Play audio
-                        pcm_int16 = (pcm_np * 32768).astype(np.int16)
-                        audio_out.play(pcm_int16, self._mimi.sample_rate)
+                        # Play audio (skip when muted for TTS override)
+                        if not audio_muted.is_set():
+                            pcm_int16 = (pcm_np * 32768).astype(np.int16)
+                            audio_out.play(pcm_int16, self._mimi.sample_rate)
+
+                        # Drain TTS queue — play tool result via speaker
+                        try:
+                            tts_audio = tts_pcm_queue.get_nowait()
+                            if tts_audio is not None:
+                                logger.info("Playing TTS locally: %.1fs",
+                                            len(tts_audio) / self._mimi.sample_rate)
+                                tts_int16 = (tts_audio * 32768).clip(-32768, 32767).astype(np.int16)
+                                audio_out.play(tts_int16, self._mimi.sample_rate)
+                                audio_muted.clear()
+                                logger.info("TTS complete, unmuted")
+                        except queue.Empty:
+                            pass
 
                         # State + motion callbacks
                         rms = float(np.sqrt(np.mean(pcm_np ** 2)))
