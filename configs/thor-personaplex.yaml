@@ -1,0 +1,20 @@
+# PersonaPlex full-duplex voice assistant (headless, browser audio)
+
+mode: personaplex
+
+personaplex_audio: browser
+personaplex_port: 8998
+personaplex_ssl_dir: ~/personaplex-ssl
+personaplex_voice: NATF1
+personaplex_text_prompt: >
+  You enjoy having a good conversation. You are curious about the world
+  and enjoy learning new things. Have a natural, friendly conversation.
+personaplex_tool_detection: prompt
+personaplex_dir: ~/personaplex
+personaplex_cpu_cores: "4-13"
+
+# VLM for vision tools (optional — requires vLLM container running)
+llm_backend: vllm
+llm_host: "http://localhost:8001/v1"
+vision_enabled: true
+camera_device: 2
