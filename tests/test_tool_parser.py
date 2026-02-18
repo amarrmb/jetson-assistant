@@ -324,3 +324,37 @@ def test_keyword_camera_hardware_question():
         detector.feed(token)
     assert len(fired) == 1
     assert fired[0][0] == "check_camera"
+
+
+def test_keyword_superbowl_query_is_clean():
+    """'Super Bowl' should generate a clean query, not the model's hallucinated answer."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    # Model hallucinating: "Superbowl 2026 was won by the Cincinnati Bengals"
+    for token in ["Superbowl", " 2026", " was", " won"]:
+        detector.feed(token)
+    assert len(fired) == 1
+    assert fired[0][0] == "web_search"
+    # Query should NOT contain "Cincinnati Bengals"
+    query = fired[0][1]["query"]
+    assert "Cincinnati" not in query
+    assert "Super Bowl" in query or "super bowl" in query.lower()
+
+
+def test_keyword_who_won_query_truncates_answer():
+    """'who won the game' should not include model's fabricated answer in query."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    for token in ["Who", " won", " the", " cricket", " world", " cup", "?",
+                  " India", " won", " with"]:
+        detector.feed(token)
+    assert len(fired) >= 1
+    query = fired[0][1]["query"]
+    # Should not contain "India won" (model's answer)
+    assert "India won" not in query

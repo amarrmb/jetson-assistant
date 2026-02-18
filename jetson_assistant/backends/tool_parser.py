@@ -229,25 +229,55 @@ class KeywordToolDetector:
                 return
 
     def _extract_search_query(self, match: re.Match) -> str:
-        """Extract a search query from the text around the pattern match."""
+        """Extract a clean search query from the matched pattern.
+
+        For topic patterns (super bowl, election, etc.), construct a
+        direct question query instead of using the model's text (which
+        may contain hallucinated answers).
+        """
+        matched = match.group().lower().strip()
+
+        # Topic-specific clean queries — don't use model's fabricated answer
+        topic_queries = {
+            "super bowl": "who won the Super Bowl 2026",
+            "superbowl": "who won the Super Bowl 2026",
+            "world cup": "who won the World Cup latest results",
+            "election": "latest election results 2026",
+            "oscars": "Oscar winners 2026",
+            "oscar": "Oscar winners 2026",
+            "grammy": "Grammy winners 2026",
+            "nobel": "Nobel Prize winners latest",
+        }
+        for topic, query in topic_queries.items():
+            if topic in matched:
+                return query
+
+        # For question patterns (who won, what is the latest, etc.),
+        # use the text around the match but truncate at the answer
         text = self._sentence_buf.strip()
-        # Find the sentence containing the match
-        # Split on sentence boundaries and find the one with the match
         sentences = re.split(r'(?<=[.!?])\s+', text)
         match_text = match.group()
-        for sent in reversed(sentences):  # prefer latest sentence
+        for sent in reversed(sentences):
             if match_text.lower() in sent.lower():
                 query = sent.strip()
                 break
         else:
-            # Fallback: use last 60 chars
             query = text[-60:].strip()
 
         # Remove filler prefixes
-        for prefix in ("well ", "so ", "let me ", "i think ", "actually ", "oh ", "hmm "):
+        for prefix in ("well ", "so ", "let me ", "i think ", "actually ", "oh ", "hmm ",
+                        "alright ", "okay ", "sure "):
             if query.lower().startswith(prefix):
                 query = query[len(prefix):]
-        # Cap length for DuckDuckGo
+
+        # Truncate at answer indicators — keep the question, drop the model's answer
+        for splitter in (" was won by", " is won by", " the winner is", " the answer is",
+                         " the result is", " it was ", " it is "):
+            idx = query.lower().find(splitter)
+            if idx > 10:  # only if there's enough question before the split
+                query = query[:idx]
+                break
+
         if len(query) > 80:
             query = query[:80]
         return query.strip() or "latest news"
