@@ -901,101 +901,16 @@ class VoiceAssistant:
                     logger.error("Failed to load external tools from %s: %s", module_path, e)
 
     def _init_tools_personaplex(self) -> None:
-        """Register tools for PersonaPlex mode.
+        """Register tools for PersonaPlex mode (external plugins only).
 
-        Registers standalone builtin tools (web_search, check_camera, get_time)
-        plus external tool plugins (e.g., reachy_tools) for bracket-based dispatch.
+        In PersonaPlex mode, builtin tools (timers, camera, etc.) aren't used
+        because there's no LLM function-calling pipeline. Only external tool
+        plugins (e.g., reachy_tools) are loaded for bracket-based dispatch.
         """
         from jetson_assistant.assistant.tools import ToolRegistry
-        from typing import Annotated
 
         self._tools = ToolRegistry()
 
-        # ── get_time (no deps) ──
-        @self._tools.register(
-            "Get the current date and time."
-        )
-        def get_time() -> str:
-            from datetime import datetime
-            now = datetime.now()
-            return now.strftime("It's %I:%M %p on %A, %B %d, %Y.").replace(" 0", " ")
-
-        # ── web_search (DuckDuckGo only — self-contained) ──
-        @self._tools.register(
-            "Search the web for current information."
-        )
-        def web_search(
-            query: Annotated[str, "The search query"],
-        ) -> str:
-            DDGS = None
-            try:
-                from ddgs import DDGS
-            except ImportError:
-                try:
-                    from duckduckgo_search import DDGS
-                except ImportError:
-                    return "Web search not available. Install with: pip install ddgs"
-
-            try:
-                from datetime import datetime
-                date_str = datetime.now().strftime("%B %Y")
-                ddgs = DDGS()
-                results = list(ddgs.news(query, max_results=3))
-                if not results:
-                    results = list(ddgs.text(f"{query} {date_str}", max_results=3))
-                if not results:
-                    return f"No results found for '{query}'."
-                r = results[0]
-                title = r.get("title", "")
-                body = r.get("body", r.get("description", ""))
-                if len(body) > 200:
-                    cut = body[:200].rfind(". ")
-                    if cut > 50:
-                        body = body[:cut + 1]
-                    else:
-                        body = body[:200]
-                return f"{title}. {body}"
-            except Exception as e:
-                return f"Search failed: {e}"
-
-        # ── check_camera (needs Camera + VLM) ──
-        if self.config.vision_enabled:
-            try:
-                from jetson_assistant.assistant.vision import Camera, CameraConfig
-                from jetson_assistant.assistant.llm import create_llm
-
-                cam = Camera(CameraConfig(device=self.config.camera_device))
-                if cam.open():
-                    vlm = create_llm(
-                        self.config.llm_backend,
-                        host=self.config.llm_host,
-                    )
-                    self._personaplex_camera = cam
-                    self._personaplex_vlm = vlm
-
-                    @self._tools.register(
-                        "Look through the camera and describe what you see."
-                    )
-                    def check_camera(
-                        question: Annotated[str, "What to look for"] = "Describe what you see",
-                    ) -> str:
-                        frame_b64 = cam.capture_base64()
-                        if frame_b64 is None:
-                            return "Failed to capture frame from camera."
-                        try:
-                            response = vlm.generate(question, images=[frame_b64])
-                            return response.text.strip()
-                        except Exception as e:
-                            return f"Vision analysis failed: {e}"
-
-                    logger.info("PersonaPlex: check_camera registered (device=%d)", self.config.camera_device)
-                else:
-                    logger.warning("PersonaPlex: camera device %d failed to open, check_camera not registered",
-                                   self.config.camera_device)
-            except Exception as e:
-                logger.warning("PersonaPlex: could not init camera/VLM: %s", e)
-
-        # ── External tool plugins (reachy_tools etc.) ──
         if self.config.external_tools:
             import importlib
 
