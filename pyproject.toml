@@ -85,6 +85,9 @@ assistant = [
     "sounddevice>=0.4.6",
     "webrtcvad>=2.0.10",
     "aiohttp>=3.9",
+    "openai>=1.0.0",            # vLLM uses OpenAI-compatible API (default LLM backend)
+    "duckduckgo-search>=7.0",   # web_search builtin tool
+    "cryptography>=41.0",       # self-signed TLS for browser audio (getUserMedia requires HTTPS)
 ]
 assistant-cloud = [
     "openai>=1.0.0",

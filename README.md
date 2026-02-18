@@ -91,17 +91,31 @@ Environment variables:
 
 ### Build Locally
 
+**System prerequisites** (Ubuntu/Debian):
+```bash
+sudo apt-get install -y libportaudio2 espeak-ng
+```
+- `libportaudio2` — required by `sounddevice` for local mic/speaker audio
+- `espeak-ng` — required by Kokoro TTS phonemizer
+
+**Install:**
 ```bash
 git clone https://github.com/amarrmb/jetson-assistant.git
 cd jetson-assistant
 
-# Pick what you need
-pip install -e ".[kokoro]"              # Kokoro TTS
-pip install -e ".[nemotron]"            # Nemotron STT
-pip install -e ".[assistant]"           # Voice assistant core
-pip install -e ".[vision]"             # Camera support
-pip install -e ".[all]"                # Everything
+# Recommended: full assistant with Kokoro TTS + Nemotron STT + camera
+pip install -e ".[kokoro,nemotron,assistant,vision]"
 
+# Or pick individual extras:
+pip install -e ".[kokoro]"              # Kokoro TTS only
+pip install -e ".[nemotron]"            # Nemotron STT only
+pip install -e ".[assistant]"           # Voice assistant core (includes vLLM client, web search, browser audio)
+pip install -e ".[vision]"             # Camera support (opencv)
+pip install -e ".[all]"                # Everything
+```
+
+**Run:**
+```bash
 # Start vLLM separately, then run
 docker compose up -d vllm
 ./scripts/run-sota-demo.sh
