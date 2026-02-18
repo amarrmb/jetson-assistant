@@ -439,9 +439,15 @@ def assistant(
     if "stream_llm" in yaml_config and "no_stream" not in cli_overrides:
         no_stream = not yaml_config["stream_llm"]
 
+    # Resolve mode early — PersonaPlex mode skips pipeline loading entirely
+    mode = yaml_config.get("mode", "pipeline")
+
     engine = None
 
-    if server:
+    if mode == "personaplex":
+        console.print("[green]PersonaPlex mode:[/green] Full-duplex speech-to-speech")
+        console.print("[dim]Skipping pipeline (TTS/STT/LLM) — PersonaPlex handles everything[/dim]\n")
+    elif server:
         # Server mode - connect to running server (FAST)
         console.print(f"[green]Server mode:[/green] Connecting to localhost:{server_port}")
         console.print("[dim]Make sure server is running: jetson-assistant serve[/dim]\n")
@@ -524,6 +530,17 @@ def assistant(
         knowledge_collection=knowledge,
         remote_camera_port=remote_camera_port,
         external_tools=external_tools_list,
+        # PersonaPlex fields (from YAML config)
+        mode=mode,
+        personaplex_audio=yaml_config.get("personaplex_audio", "browser"),
+        personaplex_port=yaml_config.get("personaplex_port", 8998),
+        personaplex_ssl_dir=yaml_config.get("personaplex_ssl_dir"),
+        personaplex_voice=yaml_config.get("personaplex_voice", "NATF1"),
+        personaplex_text_prompt=yaml_config.get("personaplex_text_prompt"),
+        personaplex_tool_detection=yaml_config.get("personaplex_tool_detection", "prompt"),
+        personaplex_dir=yaml_config.get("personaplex_dir", "~/personaplex"),
+        personaplex_cpu_cores=yaml_config.get("personaplex_cpu_cores", "4-13"),
+        personaplex_hf_repo=yaml_config.get("personaplex_hf_repo", "nvidia/personaplex-7b-v1"),
     )
 
     # Create and run assistant

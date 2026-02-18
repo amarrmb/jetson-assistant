@@ -1,7 +1,9 @@
-"""Parse PersonaPlex text token stream for [tool commands]."""
+"""Parse PersonaPlex text token stream for [tool commands] and keyword triggers."""
 
 import logging
-from typing import Callable
+import re
+import time
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -102,3 +104,153 @@ class ToolParser:
 
         self._on_tool({"name": tool_name, "args": args, "raw": raw})
         logger.debug("Tool detected: %s(%s)", tool_name, args)
+
+
+# ── Keyword-based tool detection for PersonaPlex ──
+#
+# Moshi 7B is a speech-to-speech model that doesn't reliably emit structured
+# [bracket] commands from system prompts. KeywordToolDetector monitors the
+# model's text output and triggers tools based on keyword patterns.
+#
+# Pattern categories:
+#   SEARCH — factual questions the model is likely to hallucinate about
+#   CAMERA — requests to look at / describe the visual scene
+#   TIME   — time queries (trivial, no hallucination risk)
+
+_SEARCH_PATTERNS = [
+    # Question patterns (model echoing/paraphrasing user's question)
+    (re.compile(r"\bwho (?:won|is|was|are|were)\b", re.I), None),
+    (re.compile(r"\bwhat (?:is|are|was|were) (?:the |a )?(?:latest|score|result|news|price|weather)\b", re.I), None),
+    (re.compile(r"\bwhen (?:did|is|was|will)\b", re.I), None),
+    (re.compile(r"\bhow (?:much|many|old|tall|far)\b", re.I), None),
+    # Explicit search requests paraphrased by model
+    (re.compile(r"\bsearch(?:ing)? for\b", re.I), None),
+    (re.compile(r"\b(?:latest|recent|current) (?:news|updates|score|results)\b", re.I), None),
+    # Superbowl, election, etc. — specific factual topics
+    (re.compile(r"\b(?:super ?bowl|world cup|election|oscars?|grammy|nobel)\b", re.I), None),
+]
+
+_CAMERA_PATTERNS = [
+    (re.compile(r"\b(?:i can see|let me (?:look|see)|looking at|i see)\b", re.I), None),
+    (re.compile(r"\b(?:what do you see|what can you see|describe what|show me)\b", re.I), None),
+    (re.compile(r"\b(?:in front of|camera|through the lens)\b", re.I), None),
+]
+
+_TIME_PATTERNS = [
+    (re.compile(r"\b(?:current time|what time|the time is)\b", re.I), None),
+]
+
+
+class KeywordToolDetector:
+    """Detect tool-triggering keywords in PersonaPlex model text output.
+
+    Monitors the streaming text, accumulates into sentences, and fires
+    tool callbacks when keyword patterns match. Uses cooldowns to prevent
+    repeated triggers.
+
+    Args:
+        on_tool: Callback with (tool_name, args_dict) when a tool should fire.
+        cooldown: Minimum seconds between firing the same tool.
+        registered_tools: Set of tool names that are actually available.
+    """
+
+    def __init__(
+        self,
+        on_tool: Callable[[str, dict], None],
+        cooldown: float = 15.0,
+        registered_tools: Optional[set] = None,
+    ):
+        self._on_tool = on_tool
+        self._cooldown = cooldown
+        self._registered = registered_tools or {"web_search", "check_camera", "get_time"}
+        self._sentence_buf = ""
+        self._last_fire: dict[str, float] = {}
+        self._token_count = 0
+
+    def feed(self, token: str) -> None:
+        """Feed a text token from the model's output stream."""
+        self._sentence_buf += token
+        self._token_count += 1
+
+        # Check at sentence boundaries or every ~30 tokens (~2 seconds of model output)
+        if self._at_sentence_end(token) or self._token_count >= 30:
+            self._check_and_fire()
+            # Keep a sliding window — trim old text but keep recent context
+            if len(self._sentence_buf) > 200:
+                self._sentence_buf = self._sentence_buf[-100:]
+            self._token_count = 0
+
+    def flush(self) -> None:
+        """Check remaining buffer at end of stream."""
+        if self._sentence_buf.strip():
+            self._check_and_fire()
+        self._sentence_buf = ""
+        self._token_count = 0
+
+    def _at_sentence_end(self, token: str) -> bool:
+        return any(ch in token for ch in ".!?")
+
+    def _can_fire(self, tool_name: str) -> bool:
+        last = self._last_fire.get(tool_name, 0.0)
+        return (time.time() - last) >= self._cooldown
+
+    def _fire(self, tool_name: str, args: dict) -> None:
+        if not self._can_fire(tool_name):
+            return
+        if tool_name not in self._registered:
+            return
+        self._last_fire[tool_name] = time.time()
+        logger.info("Keyword trigger: %s(%s) from: ...%s", tool_name, args, self._sentence_buf[-60:])
+        self._on_tool(tool_name, args)
+
+    def _extract_search_query(self, match: re.Match) -> str:
+        """Extract a search query from the text around the pattern match."""
+        text = self._sentence_buf.strip()
+        # Find the sentence containing the match
+        # Split on sentence boundaries and find the one with the match
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        match_text = match.group()
+        for sent in reversed(sentences):  # prefer latest sentence
+            if match_text.lower() in sent.lower():
+                query = sent.strip()
+                break
+        else:
+            # Fallback: use last 60 chars
+            query = text[-60:].strip()
+
+        # Remove filler prefixes
+        for prefix in ("well ", "so ", "let me ", "i think ", "actually ", "oh ", "hmm "):
+            if query.lower().startswith(prefix):
+                query = query[len(prefix):]
+        # Cap length for DuckDuckGo
+        if len(query) > 80:
+            query = query[:80]
+        return query.strip() or "latest news"
+
+    def _check_and_fire(self) -> None:
+        text = self._sentence_buf.lower()
+        if len(text) < 8:
+            return
+
+        # Check search patterns
+        for pattern, _ in _SEARCH_PATTERNS:
+            m = pattern.search(text)
+            if m:
+                query = self._extract_search_query(m)
+                self._fire("web_search", {"query": query})
+                self._sentence_buf = ""  # Reset after firing
+                return
+
+        # Check camera patterns
+        for pattern, _ in _CAMERA_PATTERNS:
+            if pattern.search(text):
+                self._fire("check_camera", {"question": "Describe what you see in detail"})
+                self._sentence_buf = ""
+                return
+
+        # Check time patterns
+        for pattern, _ in _TIME_PATTERNS:
+            if pattern.search(text):
+                self._fire("get_time", {})
+                self._sentence_buf = ""
+                return

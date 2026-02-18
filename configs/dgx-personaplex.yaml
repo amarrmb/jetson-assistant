@@ -1,4 +1,4 @@
-# PersonaPlex full-duplex voice assistant (headless, browser audio)
+# PersonaPlex full-duplex voice assistant on DGX Spark (browser audio via tunnel)
 
 mode: personaplex
 
@@ -7,23 +7,20 @@ personaplex_port: 8998
 personaplex_ssl_dir: ~/personaplex-ssl
 personaplex_voice: NATF1
 personaplex_text_prompt: >
-  You are a helpful voice assistant running on NVIDIA Jetson Thor.
+  You are a helpful voice assistant running on NVIDIA DGX Spark.
   You can use tools by saying them in brackets:
   [search your query] - Search the web for current information
-  [camera what to look for] - Look through the camera and describe what you see
   When asked factual questions, current events, or "who won", use [search ...].
-  When asked "what do you see" or about the camera, use [camera ...].
   Use tools naturally in conversation. Example: "Let me look that up. [search who won the superbowl 2026]"
   Have natural, friendly conversations. Keep responses concise.
 personaplex_tool_detection: keyword
 personaplex_dir: ~/personaplex
-personaplex_cpu_cores: "4-13"
+personaplex_cpu_cores: "4-19"
+personaplex_hf_repo: nvidia/personaplex-7b-v1
 
-# Transcript page served from PersonaPlex aiohttp (not VisionPreview)
+# No camera/vision on DGX Spark
+vision_enabled: false
 stream_vision_port: 0
 
-# VLM for vision tools (optional — requires vLLM container running)
-llm_backend: vllm
-llm_host: "http://localhost:8001/v1"
-vision_enabled: true
-camera_device: 2
+# No external tools (no robot)
+external_tools: []

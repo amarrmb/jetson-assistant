@@ -410,7 +410,7 @@ class PersonaplexBackend:
         import sphn
         import aiohttp
         from aiohttp import web
-        from jetson_assistant.backends.tool_parser import ToolParser
+        from jetson_assistant.backends.tool_parser import ToolParser, KeywordToolDetector
 
         self._running = True
         lock = asyncio.Lock()
@@ -448,17 +448,13 @@ class PersonaplexBackend:
                 if not ws.closed:
                     await ws.send_bytes(b"\x00")
 
-                # Tool parser with async execution
+                # Tool execution helper (shared by bracket parser + keyword detector)
                 loop = asyncio.get_event_loop()
 
-                def on_tool_detected(tool_info):
-                    name = tool_info["name"]
-                    args = tool_info["args"]
-                    # Add tool call to transcript immediately
+                def _execute_tool(name, args):
+                    """Add tool to transcript and execute async in thread pool."""
                     tool_id = backend.add_tool_call(name, args)
-
                     if self._tool_registry:
-                        # Execute tool in thread pool (non-blocking)
                         def _run_tool():
                             class _TC:
                                 def __init__(self, n, a):
@@ -471,15 +467,30 @@ class PersonaplexBackend:
                                 result_str = f"Error: {e}"
                             backend.add_tool_result(tool_id, result_str)
                             logger.info("Tool %s -> %s", name, result_str[:100])
-
                         self._tool_executor.submit(_run_tool)
                     else:
                         backend.add_tool_result(tool_id, "No tool registry configured")
 
+                # Bracket parser ([tool command] in model output)
+                def on_tool_detected(tool_info):
+                    _execute_tool(tool_info["name"], tool_info["args"])
+
                 tool_parser = ToolParser(
-                    on_text=lambda t: None,  # Text display handled by WebSocket 0x02 messages
+                    on_text=lambda t: None,
                     on_tool=on_tool_detected,
                 )
+
+                # Keyword detector (monitors model text for tool-triggering patterns)
+                keyword_detector = None
+                if self.config.personaplex_tool_detection == "keyword":
+                    registered = set()
+                    if self._tool_registry:
+                        registered = set(self._tool_registry._tools.keys())
+                    keyword_detector = KeywordToolDetector(
+                        on_tool=_execute_tool,
+                        cooldown=15.0,
+                        registered_tools=registered,
+                    )
 
                 close = False
 
@@ -589,6 +600,8 @@ class PersonaplexBackend:
                                     _text = self._text_tokenizer.id_to_piece(text_token)
                                     _text = _text.replace("\u2581", " ")
                                     tool_parser.feed(_text)
+                                    if keyword_detector:
+                                        keyword_detector.feed(_text)
                                     # Send text to browser (PersonaPlex audio UI)
                                     msg = b"\x02" + bytes(_text, encoding="utf8")
                                     await ws.send_bytes(msg)
@@ -607,6 +620,8 @@ class PersonaplexBackend:
                                 backend.add_frame_timing(_total_ms)
 
                     tool_parser.flush()
+                    if keyword_detector:
+                        keyword_detector.flush()
                     backend.add_stream_end()
 
                 async def send_loop():
@@ -746,7 +761,7 @@ class PersonaplexBackend:
         """
         import torch
         from jetson_assistant.assistant.audio_io import AudioInput, AudioOutput, AudioConfig
-        from jetson_assistant.backends.tool_parser import ToolParser
+        from jetson_assistant.backends.tool_parser import ToolParser, KeywordToolDetector
         import resampy
 
         self._running = True
@@ -766,14 +781,11 @@ class PersonaplexBackend:
         # Audio I/O at Mimi's sample rate (24kHz)
         audio_out = AudioOutput(sample_rate=self._mimi.sample_rate)
 
-        # Tool parser with async execution
+        # Tool execution helper
         backend = self
 
-        def on_tool_detected(tool_info):
-            name = tool_info["name"]
-            args = tool_info["args"]
+        def _execute_tool(name, args):
             tool_id = backend.add_tool_call(name, args)
-
             if self._tool_registry:
                 def _run_tool():
                     class _TC:
@@ -787,12 +799,26 @@ class PersonaplexBackend:
                         result_str = f"Error: {e}"
                     backend.add_tool_result(tool_id, result_str)
                     logger.info("Tool %s -> %s", name, result_str[:100])
-
                 self._tool_executor.submit(_run_tool)
             else:
                 backend.add_tool_result(tool_id, "No tool registry configured")
 
+        def on_tool_detected(tool_info):
+            _execute_tool(tool_info["name"], tool_info["args"])
+
         tool_parser = ToolParser(on_text=lambda t: None, on_tool=on_tool_detected)
+
+        # Keyword detector
+        keyword_detector = None
+        if self.config.personaplex_tool_detection == "keyword":
+            registered = set()
+            if self._tool_registry:
+                registered = set(self._tool_registry._tools.keys())
+            keyword_detector = KeywordToolDetector(
+                on_tool=_execute_tool,
+                cooldown=15.0,
+                registered_tools=registered,
+            )
 
         # Audio buffer (mic -> model)
         audio_buffer = []
@@ -863,6 +889,8 @@ class PersonaplexBackend:
                             _text = self._text_tokenizer.id_to_piece(text_token)
                             _text = _text.replace("\u2581", " ")
                             tool_parser.feed(_text)
+                            if keyword_detector:
+                                keyword_detector.feed(_text)
                             backend.add_transcript_stream(_text)
 
         except KeyboardInterrupt:
@@ -871,6 +899,8 @@ class PersonaplexBackend:
             audio_in.stop()
             audio_out.stop()
             tool_parser.flush()
+            if keyword_detector:
+                keyword_detector.flush()
             self._running = False
             self._set_state("idle")
 

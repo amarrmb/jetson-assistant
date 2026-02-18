@@ -1,5 +1,6 @@
 import pytest
-from jetson_assistant.backends.tool_parser import ToolParser
+import time
+from jetson_assistant.backends.tool_parser import ToolParser, KeywordToolDetector
 
 
 class FakeToolCall:
@@ -170,3 +171,115 @@ def test_tool_parsing_describe():
     parser.flush()
     assert tools[0]["name"] == "check_camera"
     assert tools[0]["args"] == {"question": "Describe what you see"}
+
+
+# ── KeywordToolDetector tests ──
+
+def test_keyword_search_who_won():
+    """Model output 'who won the super bowl' should trigger web_search."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    # Simulate model text tokens
+    for token in ["The", " Super", " Bowl", " was", " won", " by"]:
+        detector.feed(token)
+    detector.feed(".")  # sentence end triggers check
+    assert len(fired) == 1
+    assert fired[0][0] == "web_search"
+
+
+def test_keyword_search_what_is_latest():
+    """'what is the latest news' should trigger web_search."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    for token in ["Well", ", what", " is", " the", " latest", " news", " today", "?"]:
+        detector.feed(token)
+    assert len(fired) == 1
+    assert fired[0][0] == "web_search"
+
+
+def test_keyword_camera_i_can_see():
+    """Model output 'I can see' should trigger check_camera."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    for token in ["I", " can", " see", " something", " interesting", "."]:
+        detector.feed(token)
+    assert len(fired) == 1
+    assert fired[0][0] == "check_camera"
+
+
+def test_keyword_time():
+    """Model output 'the current time' should trigger get_time."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    for token in ["The", " current", " time", " is", "."]:
+        detector.feed(token)
+    assert len(fired) == 1
+    assert fired[0][0] == "get_time"
+
+
+def test_keyword_cooldown():
+    """Same tool should not fire again within cooldown period."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=5.0,  # long cooldown
+    )
+    for token in ["Who", " won", " the", " game", "?"]:
+        detector.feed(token)
+    assert len(fired) == 1
+
+    # Second trigger within cooldown should NOT fire
+    for token in [" Who", " won", " the", " election", "?"]:
+        detector.feed(token)
+    assert len(fired) == 1  # still 1
+
+
+def test_keyword_no_false_positive():
+    """Ordinary conversation should NOT trigger tools."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    for token in ["Hello", "!", " How", " are", " you", " doing", " today", "?"]:
+        detector.feed(token)
+    detector.flush()
+    assert len(fired) == 0
+
+
+def test_keyword_unregistered_tool_not_fired():
+    """Tools not in registered_tools should not fire."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+        registered_tools={"get_time"},  # only time, no search
+    )
+    for token in ["Who", " won", " the", " game", "?"]:
+        detector.feed(token)
+    assert len(fired) == 0  # web_search not registered
+
+
+def test_keyword_model_hedging():
+    """Model hedging 'let me search' should trigger web_search."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    for token in ["Let", " me", " search", " for", " that", "."]:
+        detector.feed(token)
+    assert len(fired) == 1
+    assert fired[0][0] == "web_search"
