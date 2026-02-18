@@ -211,8 +211,13 @@ class TestMultiWatchMonitor:
             self._cleanup()
 
     def test_watch_nonexistent_camera(self):
-        """Watching a camera that doesn't exist returns error."""
-        monitor, _, _ = self._make_monitor()
+        """Watching a camera that doesn't exist returns error (multi-camera pool)."""
+        pool, tmpfile = _make_pool_with_camera("cam1")
+        pool.add("cam2", "usb:1")
+        pool.capture_base64 = MagicMock(return_value="fake_frame")
+        self._tmpfile = tmpfile
+
+        monitor, _, _ = self._make_monitor(pool=pool)
         try:
             result = monitor.start_watching("ghost", _make_condition())
             assert "not found" in result.lower()

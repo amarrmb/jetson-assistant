@@ -123,6 +123,12 @@ services:
       - TORCH_COMPILE_DISABLE=1
       - LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/host-libs:/host-libs/libcudss/13:/usr/local/cuda/lib64:/usr/local/cuda/compat
       - ALSA_CARD=${ALSA_CARD:-}    # Audio device name (run "aplay -l" to find yours)
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'jetson.assistant' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     depends_on:
       vllm:
         condition: service_healthy
