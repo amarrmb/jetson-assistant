@@ -771,6 +771,7 @@ class VoiceAssistant:
             show_window=self.config.show_vision,
             stream_port=self.config.stream_vision_port,
         )
+        self._vision_preview.set_audio_callback(self._on_audio_chunk)
         self._vision_preview.start()
 
     def _update_preview(self, **kwargs) -> None:
@@ -1660,8 +1661,14 @@ class VoiceAssistant:
 
         audio_input = AudioInput(config=self.audio_config, device=self.config.audio_input_device)
 
+        def _local_audio_chunk(audio):
+            # Suppress local mic when a browser WebSocket is providing audio
+            if self._vision_preview and self._vision_preview.has_browser_client:
+                return
+            self._on_audio_chunk(audio)
+
         try:
-            audio_input.start(self._on_audio_chunk)
+            audio_input.start(_local_audio_chunk)
 
             while self._running:
                 time.sleep(0.1)
@@ -2329,7 +2336,18 @@ class VoiceAssistant:
                 if self._bargein_event.is_set():
                     continue
 
-                self.audio_output.play_blocking(audio_data, sample_rate)
+                # Route audio: browser WebSocket or local playback
+                if self._vision_preview and self._vision_preview.has_browser_client:
+                    # Convert to int16 for browser delivery
+                    if audio_data.dtype != np.int16:
+                        if audio_data.dtype in (np.float32, np.float64):
+                            audio_data = (audio_data * 32767).astype(np.int16)
+                        else:
+                            audio_data = audio_data.astype(np.int16)
+                    self._vision_preview.queue_tts_audio(audio_data, sample_rate)
+                    time.sleep(len(audio_data) / sample_rate)
+                else:
+                    self.audio_output.play_blocking(audio_data, sample_rate)
 
                 # Stream sentence to transcript overlay
                 if self._vision_preview is not None:
@@ -2401,20 +2419,26 @@ class VoiceAssistant:
             # Feed audio to external tool plugins for motion sync
             self._notify_audio_playback(audio, sr)
 
-            tmpf = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            wavfile.write(tmpf.name, sr, audio)
-            tmpf.close()
+            # Route audio: browser WebSocket or local aplay
+            if self._vision_preview and self._vision_preview.has_browser_client:
+                self._vision_preview.queue_tts_audio(audio, sr)
+                # Sleep for audio duration to maintain state timing
+                time.sleep(len(audio) / sr)
+            else:
+                tmpf = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                wavfile.write(tmpf.name, sr, audio)
+                tmpf.close()
 
-            try:
-                proc = subprocess.Popen(["aplay", "-q", tmpf.name])
-                self._aplay_proc = proc
-                proc.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                proc.terminate()
-                proc.wait()
-            finally:
-                self._aplay_proc = None
-                os.unlink(tmpf.name)
+                try:
+                    proc = subprocess.Popen(["aplay", "-q", tmpf.name])
+                    self._aplay_proc = proc
+                    proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    proc.terminate()
+                    proc.wait()
+                finally:
+                    self._aplay_proc = None
+                    os.unlink(tmpf.name)
 
             # Check if barge-in killed aplay
             if self._bargein_event.is_set():

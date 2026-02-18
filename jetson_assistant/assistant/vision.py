@@ -11,7 +11,11 @@ Requires: opencv-python-headless >= 4.8.0 (or opencv-python for --show-vision)
     pip install jetson-assistant[vision]
 """
 
+import asyncio
+import json as _json
 import logging
+import queue
+import struct
 import time
 import threading
 from dataclasses import dataclass
@@ -74,7 +78,11 @@ _TRANSCRIPT_HTML = """<!DOCTYPE html>
     <div class="pipe-stage" id="ps-tts"><span class="label">TTS</span><span class="val" id="pv-tts">--</span></div>
     <span class="badge">STREAMING</span>
   </div>
-  <div class="status"><div class="dot" id="dot"></div><span id="status">Connected</span></div>
+  <div class="status">
+    <div class="dot" id="dot"></div>
+    <span id="status">Connected</span>
+    <button id="mic-btn" style="margin-left:auto;background:#1e1e1e;border:1px solid #333;color:#e0e0e0;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;">&#127908; Connect Audio</button>
+  </div>
 </div>
 <script>
 const msgs = document.getElementById('msgs');
@@ -124,6 +132,101 @@ es.onmessage = (e) => {
   if (d.role === 'assistant') { dot.className = 'dot'; status.textContent = 'Listening'; }
 };
 es.onerror = () => { dot.className = 'dot'; status.textContent = 'Reconnecting...'; };
+
+/* ── Browser Audio (mic capture + TTS playback over WebSocket) ── */
+let ws = null;
+let audioCtx = null;
+let micStream = null;
+let nextPlayTime = 0;
+let playCtx = null;
+
+const micBtn = document.getElementById('mic-btn');
+
+micBtn.onclick = async () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.close();
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (audioCtx) { audioCtx.close(); audioCtx = null; }
+    micBtn.textContent = '\\u{1F3A4} Connect Audio';
+    micBtn.style.borderColor = '#333';
+    status.textContent = 'Disconnected from browser audio';
+    return;
+  }
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/ws');
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = async () => {
+    micBtn.textContent = '\\u23F9 Disconnect';
+    micBtn.style.borderColor = '#22c55e';
+    status.textContent = 'Browser audio connected';
+
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+      });
+      audioCtx = new AudioContext({ sampleRate: 16000 });
+      const source = audioCtx.createMediaStreamSource(micStream);
+      const processor = audioCtx.createScriptProcessor(2048, 1, 1);
+      processor.onaudioprocess = (e) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const f32 = e.inputBuffer.getChannelData(0);
+        const i16 = new Int16Array(f32.length);
+        for (let i = 0; i < f32.length; i++) {
+          i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32768));
+        }
+        ws.send(i16.buffer);
+      };
+      source.connect(processor);
+      processor.connect(audioCtx.destination);
+    } catch (err) {
+      status.textContent = 'Mic error: ' + err.message;
+      ws.close();
+    }
+  };
+
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'config') { /* future use */ }
+      return;
+    }
+    /* Binary: 4-byte little-endian sample rate + int16 PCM */
+    const view = new DataView(e.data);
+    const sr = view.getUint32(0, true);
+    const i16 = new Int16Array(e.data, 4);
+    playAudio(i16, sr);
+  };
+
+  ws.onclose = () => {
+    micBtn.textContent = '\\u{1F3A4} Connect Audio';
+    micBtn.style.borderColor = '#333';
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  };
+
+  ws.onerror = () => { status.textContent = 'WebSocket error'; };
+};
+
+function playAudio(i16, sr) {
+  if (!playCtx || playCtx.sampleRate !== sr) {
+    if (playCtx) playCtx.close();
+    playCtx = new AudioContext({ sampleRate: sr });
+    nextPlayTime = 0;
+  }
+  const f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768.0;
+  const buf = playCtx.createBuffer(1, f32.length, sr);
+  buf.getChannelData(0).set(f32);
+  const src = playCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(playCtx.destination);
+  const now = playCtx.currentTime;
+  if (nextPlayTime < now) nextPlayTime = now;
+  src.start(nextPlayTime);
+  nextPlayTime += buf.duration;
+}
 </script>
 </body>
 </html>"""
@@ -481,6 +584,12 @@ class VisionPreview:
         self._transcript: list[dict] = []
         self._transcript_id = 0
 
+        # Browser audio state (WebSocket bidirectional PCM)
+        self._browser_ws = None  # active aiohttp WebSocketResponse
+        self._audio_callback: Optional[Callable] = None  # core.py _on_audio_chunk
+        self._tts_audio_queue: queue.Queue = queue.Queue()
+        self._aio_loop: Optional[asyncio.AbstractEventLoop] = None
+
     def add_transcript(self, role: str, text: str) -> None:
         """Append a transcript entry (thread-safe, used from core.py)."""
         self._transcript_id += 1
@@ -508,19 +617,43 @@ class VisionPreview:
         if len(self._transcript) > 100:
             self._transcript = self._transcript[-100:]
 
+    # ── Browser audio API ──
+
+    def set_audio_callback(self, fn: Callable[[np.ndarray], None]) -> None:
+        """Set callback for browser audio chunks (called from core.py)."""
+        self._audio_callback = fn
+
+    @property
+    def has_browser_client(self) -> bool:
+        """True when a browser WebSocket is connected for audio."""
+        return self._browser_ws is not None
+
+    def queue_tts_audio(self, audio: np.ndarray, sample_rate: int) -> None:
+        """Queue TTS audio for delivery to browser. Called from core.py speech thread."""
+        if not self.has_browser_client:
+            return
+        if audio.dtype != np.int16:
+            if audio.dtype in (np.float32, np.float64):
+                audio = (audio * 32767).astype(np.int16)
+            else:
+                audio = audio.astype(np.int16)
+        # Pack: 4 bytes sample_rate (little-endian uint32) + raw int16 PCM
+        header = struct.pack("<I", sample_rate)
+        self._tts_audio_queue.put(header + audio.tobytes())
+
     def set_overlay(self, lines: list[str]) -> None:
         """Update the overlay text lines (thread-safe)."""
         with self._overlay_lock:
             self._overlay_lines = list(lines)
 
     def start(self) -> None:
-        """Start the preview thread (and MJPEG server if configured)."""
+        """Start the preview thread (and aiohttp server if configured)."""
         if self._thread is not None:
             return
 
         if self._stream_port > 0:
             self._jpeg_encode = self._init_jpeg_encoder()
-            self._start_mjpeg_server()
+            self._start_aiohttp_server()
 
         self._stop_event.clear()
         self._thread = threading.Thread(
@@ -530,7 +663,7 @@ class VisionPreview:
         logger.info("VisionPreview: started (window=%s, stream_port=%d)", self._show_window, self._stream_port)
 
     def stop(self) -> None:
-        """Stop the preview thread and MJPEG server."""
+        """Stop the preview thread and aiohttp server."""
         if self._thread is None:
             return
 
@@ -538,9 +671,10 @@ class VisionPreview:
         self._thread.join(timeout=3.0)
         self._thread = None
 
-        if self._mjpeg_server is not None:
-            self._mjpeg_server.shutdown()
-            self._mjpeg_server = None
+        # Shut down aiohttp event loop
+        if self._aio_loop is not None and self._aio_loop.is_running():
+            self._aio_loop.call_soon_threadsafe(self._aio_loop.stop)
+            self._aio_loop = None
 
         if self._show_window:
             try:
@@ -666,83 +800,197 @@ class VisionPreview:
 
         return _cv2_encode
 
-    def _start_mjpeg_server(self) -> None:
-        """Start a simple HTTP MJPEG streaming server in a daemon thread."""
-        import http.server
-        import socketserver
+    def _start_aiohttp_server(self) -> None:
+        """Start an aiohttp server in a daemon thread (HTTP + WebSocket)."""
+        import aiohttp
+        from aiohttp import web
 
         preview = self  # closure reference
 
-        class MJPEGHandler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                if self.path == "/video":
-                    self._stream_mjpeg()
-                elif self.path == "/events":
-                    self._stream_sse()
-                elif self.path == "/":
-                    self._serve_page()
-                else:
-                    self.send_error(404)
+        async def handle_root(request):
+            return web.Response(text=_TRANSCRIPT_HTML, content_type="text/html")
 
-            def _serve_page(self):
-                html = _TRANSCRIPT_HTML
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html")
-                self.send_header("Content-Length", str(len(html)))
-                self.end_headers()
-                self.wfile.write(html.encode())
-
-            def _stream_mjpeg(self):
-                self.send_response(200)
-                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-                self.end_headers()
-                try:
-                    while not preview._stop_event.is_set():
-                        jpeg = preview._latest_jpeg
-                        if jpeg is None:
-                            time.sleep(0.1)
-                            continue
-                        self.wfile.write(b"--frame\r\n")
-                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                        self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode())
-                        self.wfile.write(jpeg)
-                        self.wfile.write(b"\r\n")
-                        self.wfile.flush()
-                        time.sleep(1.0 / preview._fps)
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-
-            def _stream_sse(self):
-                import json as _json
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
-                self.end_headers()
-                last_id = 0
-                try:
-                    while not preview._stop_event.is_set():
-                        entries = preview._transcript
-                        new = [e for e in entries if e["id"] > last_id]
-                        for e in new:
-                            data = _json.dumps(e)
-                            self.wfile.write(f"data: {data}\n\n".encode())
-                            last_id = e["id"]
-                        self.wfile.flush()
-                        time.sleep(0.3)
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-
-            def log_message(self, format, *args):
+        async def handle_video(request):
+            resp = web.StreamResponse()
+            resp.content_type = "multipart/x-mixed-replace; boundary=frame"
+            await resp.prepare(request)
+            try:
+                while not preview._stop_event.is_set():
+                    jpeg = preview._latest_jpeg
+                    if jpeg is None:
+                        await asyncio.sleep(0.1)
+                        continue
+                    await resp.write(
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n"
+                        + f"Content-Length: {len(jpeg)}\r\n\r\n".encode()
+                        + jpeg
+                        + b"\r\n"
+                    )
+                    await asyncio.sleep(1.0 / preview._fps)
+            except (ConnectionResetError, ConnectionError):
                 pass
+            return resp
 
-        class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
-            daemon_threads = True
-            allow_reuse_address = True
+        async def handle_events(request):
+            resp = web.StreamResponse()
+            resp.content_type = "text/event-stream"
+            resp.headers["Cache-Control"] = "no-cache"
+            resp.headers["Connection"] = "keep-alive"
+            await resp.prepare(request)
+            last_id = 0
+            try:
+                while not preview._stop_event.is_set():
+                    entries = preview._transcript
+                    new = [e for e in entries if e["id"] > last_id]
+                    for e in new:
+                        data = _json.dumps(e)
+                        await resp.write(f"data: {data}\n\n".encode())
+                        last_id = e["id"]
+                    await asyncio.sleep(0.3)
+            except (ConnectionResetError, ConnectionError):
+                pass
+            return resp
 
-        server = ThreadedHTTPServer(("0.0.0.0", self._stream_port), MJPEGHandler)
-        self._mjpeg_server = server
+        async def handle_ws(request):
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            preview._browser_ws = ws
+            logger.info("Browser audio connected from %s", request.remote)
 
-        thread = threading.Thread(target=server.serve_forever, daemon=True, name="mjpeg-server")
+            # Send config
+            await ws.send_json({
+                "type": "config",
+                "output_sample_rate": 22050,
+                "input_sample_rate": 16000,
+            })
+
+            async def recv_loop():
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.BINARY:
+                        pcm = np.frombuffer(msg.data, dtype=np.int16)
+                        audio_f32 = pcm.astype(np.float32) / 32768.0
+                        if preview._audio_callback:
+                            preview._audio_callback(audio_f32)
+                    elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):
+                        break
+
+            async def send_loop():
+                loop = asyncio.get_event_loop()
+                while not ws.closed:
+                    try:
+                        data = await loop.run_in_executor(
+                            None, lambda: preview._tts_audio_queue.get(timeout=0.2)
+                        )
+                        await ws.send_bytes(data)
+                    except queue.Empty:
+                        pass
+                    except (ConnectionResetError, ConnectionError):
+                        break
+
+            try:
+                await asyncio.gather(recv_loop(), send_loop())
+            finally:
+                preview._browser_ws = None
+                # Drain any leftover TTS audio
+                while not preview._tts_audio_queue.empty():
+                    try:
+                        preview._tts_audio_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                logger.info("Browser audio disconnected")
+
+            return ws
+
+        def _make_ssl_context():
+            """Create a self-signed TLS cert for getUserMedia secure context."""
+            import ssl
+            import tempfile
+            try:
+                from cryptography import x509
+                from cryptography.x509.oid import NameOID
+                from cryptography.hazmat.primitives import hashes, serialization
+                from cryptography.hazmat.primitives.asymmetric import rsa
+                import datetime
+                import ipaddress
+
+                key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+                subject = issuer = x509.Name([
+                    x509.NameAttribute(NameOID.COMMON_NAME, "jetson-assistant"),
+                ])
+                cert = (
+                    x509.CertificateBuilder()
+                    .subject_name(subject)
+                    .issuer_name(issuer)
+                    .public_key(key.public_key())
+                    .serial_number(x509.random_serial_number())
+                    .not_valid_before(datetime.datetime.utcnow())
+                    .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=365))
+                    .add_extension(
+                        x509.SubjectAlternativeName([
+                            x509.DNSName("localhost"),
+                            x509.IPAddress(ipaddress.IPv4Address("0.0.0.0")),
+                            x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+                            x509.IPAddress(ipaddress.IPv4Address("192.168.0.28")),
+                        ]),
+                        critical=False,
+                    )
+                    .sign(key, hashes.SHA256())
+                )
+
+                cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+                key_pem = key.private_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PrivateFormat.TraditionalOpenSSL,
+                    serialization.NoEncryption(),
+                )
+
+                cert_file = tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
+                cert_file.write(cert_pem)
+                cert_file.close()
+
+                key_file = tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
+                key_file.write(key_pem)
+                key_file.close()
+
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                ctx.load_cert_chain(cert_file.name, key_file.name)
+                logger.info("VisionPreview: TLS enabled (self-signed cert for getUserMedia)")
+                return ctx
+            except ImportError:
+                logger.warning(
+                    "VisionPreview: 'cryptography' not installed — serving HTTP only. "
+                    "Browser mic will NOT work (getUserMedia requires HTTPS). "
+                    "Install with: pip install cryptography"
+                )
+                return None
+
+        async def _run_server():
+            app = web.Application()
+            app.router.add_get("/", handle_root)
+            app.router.add_get("/video", handle_video)
+            app.router.add_get("/events", handle_events)
+            app.router.add_get("/ws", handle_ws)
+
+            ssl_ctx = _make_ssl_context()
+
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, "0.0.0.0", preview._stream_port, ssl_context=ssl_ctx)
+            await site.start()
+            proto = "https" if ssl_ctx else "http"
+            logger.info("VisionPreview: aiohttp server on %s://0.0.0.0:%d", proto, preview._stream_port)
+
+            # Run until the stop event is set
+            while not preview._stop_event.is_set():
+                await asyncio.sleep(0.5)
+            await runner.cleanup()
+
+        def run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            preview._aio_loop = loop
+            loop.run_until_complete(_run_server())
+
+        thread = threading.Thread(target=run, daemon=True, name="aiohttp-server")
         thread.start()
-        logger.info("VisionPreview: MJPEG server on port %d", self._stream_port)

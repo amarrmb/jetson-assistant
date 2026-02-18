@@ -293,7 +293,10 @@ class AudioInput:
         self._use_arecord = False  # fallback flag
         if device is None:
             import pathlib
-            has_asoundrc = pathlib.Path("/root/.asoundrc").exists()
+            try:
+                has_asoundrc = pathlib.Path("/root/.asoundrc").exists()
+            except PermissionError:
+                has_asoundrc = False
             if has_asoundrc:
                 logger.info("Using ALSA default device (configured by docker-entrypoint)")
                 # PortAudio may not enumerate USB devices even when ALSA sees
