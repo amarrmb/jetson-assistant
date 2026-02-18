@@ -352,14 +352,21 @@ class PersonaplexBackend:
         app = web.Application()
         app.router.add_get("/api/chat", handle_chat)
 
-        # Serve PersonaPlex's existing web UI
-        from huggingface_hub import hf_hub_download
-        dist_tgz = hf_hub_download(self.config.personaplex_hf_repo, "dist.tgz")
-        dist_dir = Path(dist_tgz).parent / "dist"
-        if not dist_dir.exists():
-            import tarfile
-            with tarfile.open(dist_tgz, "r:gz") as tar:
-                tar.extractall(path=Path(dist_tgz).parent)
+        # Serve PersonaPlex web UI — prefer local (has patched audio buffer)
+        personaplex_dir = os.path.expanduser(self.config.personaplex_dir)
+        local_dist = Path(personaplex_dir) / "client" / "dist"
+        if local_dist.exists():
+            dist_dir = local_dist
+            logger.info("Serving local web UI from %s", dist_dir)
+        else:
+            from huggingface_hub import hf_hub_download
+            dist_tgz = hf_hub_download(self.config.personaplex_hf_repo, "dist.tgz")
+            dist_dir = Path(dist_tgz).parent / "dist"
+            if not dist_dir.exists():
+                import tarfile
+                with tarfile.open(dist_tgz, "r:gz") as tar:
+                    tar.extractall(path=Path(dist_tgz).parent)
+            logger.info("Serving HuggingFace web UI from %s", dist_dir)
 
         async def handle_root(_):
             return web.FileResponse(os.path.join(str(dist_dir), "index.html"))
