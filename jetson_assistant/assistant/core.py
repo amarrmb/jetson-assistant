@@ -757,18 +757,22 @@ class VoiceAssistant:
             logger.error("AetherBridge: init error: %s", e)
 
     def _init_vision_preview(self) -> None:
-        """Initialize vision preview if show_vision or stream_vision_port is set."""
-        if self.camera is None:
-            return
+        """Initialize vision preview if show_vision or stream_vision_port is set.
+
+        Camera is required for show_vision (OpenCV window) but optional for
+        stream_vision_port (transcript page + browser audio work without it).
+        """
         if not self.config.show_vision and self.config.stream_vision_port <= 0:
             return
+        if self.camera is None and self.config.show_vision:
+            return  # OpenCV window needs a camera
 
         from jetson_assistant.assistant.vision import VisionPreview
 
         self._vision_preview = VisionPreview(
             camera=self.camera,
             camera_lock=self._camera_lock,
-            show_window=self.config.show_vision,
+            show_window=self.config.show_vision and self.camera is not None,
             stream_port=self.config.stream_vision_port,
         )
         self._vision_preview.set_audio_callback(self._on_audio_chunk)

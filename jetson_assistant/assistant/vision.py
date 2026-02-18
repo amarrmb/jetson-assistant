@@ -557,7 +557,7 @@ class VisionPreview:
 
     def __init__(
         self,
-        camera: "Camera",
+        camera: Optional["Camera"],
         camera_lock: threading.Lock,
         fps: int = 10,
         show_window: bool = True,
@@ -652,24 +652,27 @@ class VisionPreview:
             return
 
         if self._stream_port > 0:
-            self._jpeg_encode = self._init_jpeg_encoder()
+            if self._camera is not None:
+                self._jpeg_encode = self._init_jpeg_encoder()
             self._start_aiohttp_server()
 
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._preview_loop, daemon=True, name="vision-preview"
-        )
-        self._thread.start()
-        logger.info("VisionPreview: started (window=%s, stream_port=%d)", self._show_window, self._stream_port)
+        if self._camera is not None:
+            self._stop_event.clear()
+            self._thread = threading.Thread(
+                target=self._preview_loop, daemon=True, name="vision-preview"
+            )
+            self._thread.start()
+
+        logger.info("VisionPreview: started (window=%s, stream_port=%d, camera=%s)",
+                     self._show_window, self._stream_port, self._camera is not None)
 
     def stop(self) -> None:
         """Stop the preview thread and aiohttp server."""
-        if self._thread is None:
-            return
-
         self._stop_event.set()
-        self._thread.join(timeout=3.0)
-        self._thread = None
+
+        if self._thread is not None:
+            self._thread.join(timeout=3.0)
+            self._thread = None
 
         # Shut down aiohttp event loop
         if self._aio_loop is not None and self._aio_loop.is_running():
@@ -902,6 +905,33 @@ class VisionPreview:
 
             return ws
 
+        def _get_local_ip_sans(x509_mod, ipaddress_mod):
+            """Discover all non-loopback IPv4 addresses for TLS SAN."""
+            import socket
+            sans = []
+            try:
+                for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                    addr = info[4][0]
+                    if addr.startswith("127."):
+                        continue
+                    try:
+                        sans.append(x509_mod.IPAddress(ipaddress_mod.IPv4Address(addr)))
+                    except ValueError:
+                        pass
+            except Exception:
+                pass
+            # Fallback: connect to external to find primary IP
+            if not sans:
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.connect(("8.8.8.8", 80))
+                    addr = s.getsockname()[0]
+                    s.close()
+                    sans.append(x509_mod.IPAddress(ipaddress_mod.IPv4Address(addr)))
+                except Exception:
+                    pass
+            return sans
+
         def _make_ssl_context():
             """Create a self-signed TLS cert for getUserMedia secure context."""
             import ssl
@@ -927,12 +957,11 @@ class VisionPreview:
                     .not_valid_before(datetime.datetime.utcnow())
                     .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=365))
                     .add_extension(
-                        x509.SubjectAlternativeName([
-                            x509.DNSName("localhost"),
-                            x509.IPAddress(ipaddress.IPv4Address("0.0.0.0")),
-                            x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
-                            x509.IPAddress(ipaddress.IPv4Address("192.168.0.28")),
-                        ]),
+                        x509.SubjectAlternativeName(
+                            [x509.DNSName("localhost"),
+                             x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))]
+                            + _get_local_ip_sans(x509, ipaddress)
+                        ),
                         critical=False,
                     )
                     .sign(key, hashes.SHA256())
