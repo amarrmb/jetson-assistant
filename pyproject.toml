@@ -104,6 +104,11 @@ aether = [
     "aether-sdk",
     "websocket-client>=1.0.0",
 ]
+personaplex = [
+    "aiohttp>=3.9.0",
+    "sentencepiece>=0.2.0",
+    "huggingface-hub>=0.20.0",
+]
 
 dev = [
     "pytest>=7.0",
