@@ -292,7 +292,7 @@ class PersonaplexBackend:
                                 self._pinned_pcm.copy_(main_pcm[0, 0], non_blocking=True)
                                 torch.cuda.current_stream().synchronize()
 
-                                pcm_np = self._pinned_pcm.numpy()
+                                pcm_np = self._pinned_pcm.detach().numpy()
 
                                 # Feed audio chunk for motion/animation callbacks
                                 rms = float(np.sqrt(np.mean(pcm_np ** 2)))
@@ -467,7 +467,7 @@ class PersonaplexBackend:
                         self._pinned_pcm.copy_(main_pcm[0, 0], non_blocking=True)
                         torch.cuda.current_stream().synchronize()
 
-                        pcm_np = self._pinned_pcm.numpy().copy()
+                        pcm_np = self._pinned_pcm.detach().numpy().copy()
 
                         # Play audio
                         pcm_int16 = (pcm_np * 32768).astype(np.int16)
