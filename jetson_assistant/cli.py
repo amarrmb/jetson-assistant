@@ -439,6 +439,13 @@ def assistant(
     if "stream_llm" in yaml_config and "no_stream" not in cli_overrides:
         no_stream = not yaml_config["stream_llm"]
 
+    # Configure logging so logger.info() actually outputs
+    import logging as _logging
+    _logging.basicConfig(
+        level=_logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
     # Resolve mode early — PersonaPlex mode skips pipeline loading entirely
     mode = yaml_config.get("mode", "pipeline")
 
