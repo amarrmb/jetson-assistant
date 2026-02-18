@@ -117,23 +117,31 @@ class ToolParser:
 #   CAMERA — requests to look at / describe the visual scene
 #   TIME   — time queries (trivial, no hallucination risk)
 
-_SEARCH_PATTERNS = [
-    # Question patterns (model echoing/paraphrasing user's question)
+# High-priority patterns — checked on EVERY token (fire immediately, don't wait for sentence end)
+_URGENT_SEARCH_PATTERNS = [
+    # Specific factual topics — model is about to hallucinate
+    (re.compile(r"\b(?:super ?bowl|world cup|election|oscars?|grammy|nobel)\b", re.I), None),
+    # Question patterns (model echoing user's question)
     (re.compile(r"\bwho (?:won|is|was|are|were)\b", re.I), None),
     (re.compile(r"\bwhat (?:is|are|was|were) (?:the |a )?(?:latest|score|result|news|price|weather)\b", re.I), None),
+]
+
+# Normal-priority patterns — checked at sentence boundaries
+_SEARCH_PATTERNS = [
     (re.compile(r"\bwhen (?:did|is|was|will)\b", re.I), None),
     (re.compile(r"\bhow (?:much|many|old|tall|far)\b", re.I), None),
     # Explicit search requests paraphrased by model
     (re.compile(r"\bsearch(?:ing)? for\b", re.I), None),
     (re.compile(r"\b(?:latest|recent|current) (?:news|updates|score|results)\b", re.I), None),
-    # Superbowl, election, etc. — specific factual topics
-    (re.compile(r"\b(?:super ?bowl|world cup|election|oscars?|grammy|nobel)\b", re.I), None),
 ]
 
 _CAMERA_PATTERNS = [
     (re.compile(r"\b(?:i can see|let me (?:look|see)|looking at|i see)\b", re.I), None),
     (re.compile(r"\b(?:what do you see|what can you see|describe what|show me)\b", re.I), None),
-    (re.compile(r"\b(?:in front of|camera|through the lens)\b", re.I), None),
+    (re.compile(r"\b(?:in front of|through the lens)\b", re.I), None),
+    # Hardware/device questions about cameras
+    (re.compile(r"\b(?:how many|number of) (?:cameras?|sensors?)\b", re.I), None),
+    (re.compile(r"\bcameras? (?:on ?board|do (?:you|we|i) have|are there|installed)\b", re.I), None),
 ]
 
 _TIME_PATTERNS = [
@@ -172,7 +180,10 @@ class KeywordToolDetector:
         self._sentence_buf += token
         self._token_count += 1
 
-        # Check at sentence boundaries or every ~30 tokens (~2 seconds of model output)
+        # Check urgent patterns on EVERY token (fire before model hallucinates)
+        self._check_urgent()
+
+        # Check all patterns at sentence boundaries or every ~30 tokens
         if self._at_sentence_end(token) or self._token_count >= 30:
             self._check_and_fire()
             # Keep a sliding window — trim old text but keep recent context
@@ -203,6 +214,20 @@ class KeywordToolDetector:
         logger.info("Keyword trigger: %s(%s) from: ...%s", tool_name, args, self._sentence_buf[-60:])
         self._on_tool(tool_name, args)
 
+    def _check_urgent(self) -> None:
+        """Check high-priority patterns on every token (don't wait for sentence end)."""
+        text = self._sentence_buf.lower()
+        if len(text) < 6:
+            return
+        for pattern, _ in _URGENT_SEARCH_PATTERNS:
+            m = pattern.search(text)
+            if m:
+                query = self._extract_search_query(m)
+                self._fire("web_search", {"query": query})
+                self._sentence_buf = ""
+                self._token_count = 0
+                return
+
     def _extract_search_query(self, match: re.Match) -> str:
         """Extract a search query from the text around the pattern match."""
         text = self._sentence_buf.strip()
@@ -232,25 +257,35 @@ class KeywordToolDetector:
         if len(text) < 8:
             return
 
-        # Check search patterns
-        for pattern, _ in _SEARCH_PATTERNS:
-            m = pattern.search(text)
-            if m:
-                query = self._extract_search_query(m)
-                self._fire("web_search", {"query": query})
-                self._sentence_buf = ""  # Reset after firing
-                return
-
-        # Check camera patterns
+        # Check camera patterns FIRST (more specific — "how many cameras"
+        # would otherwise match generic "how many" search pattern)
         for pattern, _ in _CAMERA_PATTERNS:
             if pattern.search(text):
                 self._fire("check_camera", {"question": "Describe what you see in detail"})
                 self._sentence_buf = ""
                 return
 
-        # Check time patterns
+        # Check time patterns (trivial, no hallucination risk)
         for pattern, _ in _TIME_PATTERNS:
             if pattern.search(text):
                 self._fire("get_time", {})
+                self._sentence_buf = ""
+                return
+
+        # Check urgent search patterns (fallback — may have been missed if buffer was short)
+        for pattern, _ in _URGENT_SEARCH_PATTERNS:
+            m = pattern.search(text)
+            if m:
+                query = self._extract_search_query(m)
+                self._fire("web_search", {"query": query})
+                self._sentence_buf = ""
+                return
+
+        # Check normal search patterns
+        for pattern, _ in _SEARCH_PATTERNS:
+            m = pattern.search(text)
+            if m:
+                query = self._extract_search_query(m)
+                self._fire("web_search", {"query": query})
                 self._sentence_buf = ""
                 return

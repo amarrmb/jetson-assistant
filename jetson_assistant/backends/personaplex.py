@@ -451,8 +451,12 @@ class PersonaplexBackend:
                 # Tool execution helper (shared by bracket parser + keyword detector)
                 loop = asyncio.get_event_loop()
 
+                # Queue for injecting tool results back into model's text stream
+                import collections
+                _inject_queue = collections.deque()  # deque of int (text token IDs)
+
                 def _execute_tool(name, args):
-                    """Add tool to transcript and execute async in thread pool."""
+                    """Add tool to transcript, execute async, queue result for injection."""
                     tool_id = backend.add_tool_call(name, args)
                     if self._tool_registry:
                         def _run_tool():
@@ -467,6 +471,12 @@ class PersonaplexBackend:
                                 result_str = f"Error: {e}"
                             backend.add_tool_result(tool_id, result_str)
                             logger.info("Tool %s -> %s", name, result_str[:100])
+                            # Queue result as text tokens for injection into model
+                            # Wrap in <system> tags so model treats it as context
+                            inject_text = f"<system> Tool result for {name}: {result_str[:200]} <system>"
+                            tokens = self._text_tokenizer.encode(inject_text)
+                            _inject_queue.extend(tokens)
+                            logger.info("Queued %d text tokens for injection", len(tokens))
                         self._tool_executor.submit(_run_tool)
                     else:
                         backend.add_tool_result(tool_id, "No tool registry configured")
@@ -551,7 +561,18 @@ class PersonaplexBackend:
                                     torch.cuda.synchronize()
                                     _ts0 = time.time()
 
-                                tokens = self._lm_gen.step(codes[:, :, c:c + 1])
+                                # Inject tool result tokens if available
+                                _forced_text = None
+                                if _inject_queue:
+                                    _forced_text = _inject_queue.popleft()
+
+                                if _forced_text is not None:
+                                    tokens = self._lm_gen.step(
+                                        codes[:, :, c:c + 1],
+                                        text_token=_forced_text,
+                                    )
+                                else:
+                                    tokens = self._lm_gen.step(codes[:, :, c:c + 1])
 
                                 if _do_log:
                                     torch.cuda.synchronize()
@@ -784,6 +805,9 @@ class PersonaplexBackend:
         # Tool execution helper
         backend = self
 
+        import collections
+        _inject_queue = collections.deque()
+
         def _execute_tool(name, args):
             tool_id = backend.add_tool_call(name, args)
             if self._tool_registry:
@@ -799,6 +823,11 @@ class PersonaplexBackend:
                         result_str = f"Error: {e}"
                     backend.add_tool_result(tool_id, result_str)
                     logger.info("Tool %s -> %s", name, result_str[:100])
+                    # Queue result for injection into model text stream
+                    inject_text = f"<system> Tool result for {name}: {result_str[:200]} <system>"
+                    tokens = self._text_tokenizer.encode(inject_text)
+                    _inject_queue.extend(tokens)
+                    logger.info("Queued %d text tokens for injection", len(tokens))
                 self._tool_executor.submit(_run_tool)
             else:
                 backend.add_tool_result(tool_id, "No tool registry configured")
@@ -859,7 +888,18 @@ class PersonaplexBackend:
                     codes = self._mimi.encode(chunk_t)
 
                     for c in range(codes.shape[-1]):
-                        tokens = self._lm_gen.step(codes[:, :, c:c + 1])
+                        # Inject tool result tokens if available
+                        _forced_text = None
+                        if _inject_queue:
+                            _forced_text = _inject_queue.popleft()
+
+                        if _forced_text is not None:
+                            tokens = self._lm_gen.step(
+                                codes[:, :, c:c + 1],
+                                text_token=_forced_text,
+                            )
+                        else:
+                            tokens = self._lm_gen.step(codes[:, :, c:c + 1])
                         if tokens is None:
                             continue
 

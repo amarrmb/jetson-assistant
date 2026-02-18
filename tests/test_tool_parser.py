@@ -283,3 +283,44 @@ def test_keyword_model_hedging():
         detector.feed(token)
     assert len(fired) == 1
     assert fired[0][0] == "web_search"
+
+
+def test_keyword_urgent_fires_before_sentence_end():
+    """'Super Bowl' should fire IMMEDIATELY, not wait for period/question mark."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    # Feed tokens WITHOUT any sentence-ending punctuation
+    for token in ["The", " Super", " Bowl"]:
+        detector.feed(token)
+    # Should have fired already — don't need sentence end for urgent patterns
+    assert len(fired) == 1
+    assert fired[0][0] == "web_search"
+
+
+def test_keyword_urgent_who_won_fires_early():
+    """'who won' should fire immediately without waiting for sentence end."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    for token in ["So", " who", " won", " the"]:
+        detector.feed(token)
+    assert len(fired) == 1
+    assert fired[0][0] == "web_search"
+
+
+def test_keyword_camera_hardware_question():
+    """'how many cameras' should trigger check_camera."""
+    fired = []
+    detector = KeywordToolDetector(
+        on_tool=lambda name, args: fired.append((name, args)),
+        cooldown=0.1,
+    )
+    for token in ["There", " are", " how", " many", " cameras", " on", " board", "."]:
+        detector.feed(token)
+    assert len(fired) == 1
+    assert fired[0][0] == "check_camera"
