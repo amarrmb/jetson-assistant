@@ -1562,6 +1562,51 @@ class VoiceAssistant:
         t.start()
         logger.info("AetherBridge: status publisher started (30s interval)")
 
+    def _run_personaplex(self) -> None:
+        """Run in PersonaPlex full-duplex mode."""
+        from jetson_assistant.backends.personaplex import PersonaplexBackend
+
+        logger.info("Starting PersonaPlex mode...")
+
+        backend = PersonaplexBackend(self.config)
+
+        # Wire callbacks — same ones reachy_tools uses
+        def on_state_change(old, new):
+            for mod in self._external_tool_modules:
+                if hasattr(mod, "on_state_change"):
+                    try:
+                        mod.on_state_change(old, new)
+                    except Exception as e:
+                        logger.error("Plugin on_state_change error: %s", e)
+
+        def on_audio_chunk(audio, sample_rate):
+            for mod in self._external_tool_modules:
+                if hasattr(mod, "on_audio_chunk"):
+                    try:
+                        mod.on_audio_chunk(audio, sample_rate)
+                    except Exception as e:
+                        logger.error("Plugin on_audio_chunk error: %s", e)
+
+        backend.set_callbacks(
+            on_state_change=on_state_change,
+            on_audio_chunk=on_audio_chunk,
+            tool_registry=self._tools,
+        )
+
+        try:
+            backend.run()
+        except KeyboardInterrupt:
+            logger.info("Stopping PersonaPlex mode...")
+        finally:
+            backend.stop()
+            for mod in self._external_tool_modules:
+                if hasattr(mod, "cleanup"):
+                    try:
+                        mod.cleanup()
+                    except Exception as e:
+                        logger.error("Plugin cleanup error: %s", e)
+            self._running = False
+
     def run(self) -> None:
         """
         Run the assistant (blocking).
@@ -1573,6 +1618,12 @@ class VoiceAssistant:
         4. Plays response
         """
         self._running = True
+
+        # PersonaPlex mode — full-duplex speech-to-speech
+        if self.config.mode == "personaplex":
+            self._run_personaplex()
+            return
+
         logger.info("Assistant ready! Say '%s' to start...", self.config.wake_word.replace('_', ' '))
 
         audio_input = AudioInput(config=self.audio_config, device=self.config.audio_input_device)
