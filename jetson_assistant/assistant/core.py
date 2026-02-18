@@ -123,6 +123,18 @@ class AssistantConfig:
     # External tool plugins (list of importable module paths)
     external_tools: Optional[list] = None  # e.g. ["reachy_tools", "my_pkg.tools"]
 
+    # PersonaPlex mode
+    mode: str = "pipeline"  # "pipeline" (existing STT→LLM→TTS) or "personaplex"
+    personaplex_audio: str = "browser"  # "browser" (WebSocket) or "local" (pyaudio)
+    personaplex_port: int = 8998
+    personaplex_ssl_dir: Optional[str] = None  # Path to dir with cert.pem + key.pem
+    personaplex_voice: str = "NATF1"  # PersonaPlex voice persona filename
+    personaplex_text_prompt: Optional[str] = None  # System prompt for PersonaPlex
+    personaplex_tool_detection: str = "prompt"  # "prompt", "keyword", or "llm"
+    personaplex_dir: str = "~/personaplex"  # Path to fp8_quantize.py etc.
+    personaplex_cpu_cores: str = "4-13"  # CPU affinity for inference
+    personaplex_hf_repo: str = "nvidia/personaplex-7b-v1"
+
     # Callbacks
     on_wake: Optional[Callable[[], None]] = None
     on_listen_start: Optional[Callable[[], None]] = None
