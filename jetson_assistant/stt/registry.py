@@ -102,3 +102,9 @@ def _discover_backends() -> None:
         from jetson_assistant.stt import nemotron  # noqa: F401
     except ImportError:
         pass
+
+    # NemotronFast backend (direct forward, no Lhotse overhead)
+    try:
+        from jetson_assistant.stt import nemotron_fast  # noqa: F401
+    except ImportError:
+        pass

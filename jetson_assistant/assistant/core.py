@@ -610,6 +610,12 @@ class VoiceAssistant:
             stt = get_stt_backend("nemotron")
             stt.load(model_size=self.config.stt_model)
             self._local_stt = stt
+        elif self.config.stt_backend == "nemotron_fast":
+            from jetson_assistant.stt.registry import get_stt_backend
+
+            stt = get_stt_backend("nemotron_fast")
+            stt.load(model_size=self.config.stt_model)
+            self._local_stt = stt
 
     def _transcribe(self, audio: np.ndarray, sample_rate: int, language: str | None = None):
         """Transcribe audio using direct STT backend or engine."""

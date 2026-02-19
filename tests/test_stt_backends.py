@@ -2,6 +2,7 @@
 Tests for STT backends.
 """
 
+import numpy as np
 import pytest
 
 from jetson_assistant.stt.base import STTBackend, TranscriptionResult, TranscriptionSegment
@@ -129,3 +130,52 @@ class TestNemotronBackend:
             assert "0.6b" in sizes
         except (ValueError, ImportError):
             pytest.skip("Nemotron (NeMo) not installed")
+
+
+class TestNemotronFastBackend:
+    """Test NemotronFast STT backend (direct forward path)."""
+
+    def test_nemotron_fast_backend_creation(self):
+        """Test creating NemotronFast backend via registry."""
+        try:
+            backend = get_stt_backend("nemotron_fast")
+            assert backend.name == "nemotron_fast"
+            assert backend.supports_streaming is False
+        except (ValueError, ImportError):
+            pytest.skip("NemotronFast (NeMo) not installed")
+
+    def test_nemotron_fast_transcribe_returns_result(self):
+        """Test NemotronFast transcribe returns TranscriptionResult.
+
+        Loads the actual model and transcribes 1 second of synthetic audio.
+        Skipped if NeMo or CUDA is not available.
+        """
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                pytest.skip("CUDA not available")
+        except ImportError:
+            pytest.skip("PyTorch not installed")
+
+        try:
+            backend = get_stt_backend("nemotron_fast")
+        except (ValueError, ImportError):
+            pytest.skip("NemotronFast (NeMo) not installed")
+
+        try:
+            backend.load()
+        except Exception as e:
+            pytest.skip(f"Could not load NemotronFast model: {e}")
+
+        # Generate 1 second of synthetic 16kHz int16 audio (silence with noise)
+        rng = np.random.default_rng(42)
+        audio = (rng.standard_normal(16000) * 100).astype(np.int16)
+
+        result = backend.transcribe(audio, sample_rate=16000)
+
+        assert isinstance(result, TranscriptionResult)
+        assert result.language == "en"
+        assert result.duration > 0
+        assert result.metadata.get("backend") == "nemotron_fast"
+
+        backend.unload()
