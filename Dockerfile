@@ -38,7 +38,7 @@ ARG PLATFORM=thor
 
 # Thor: JetPack 7, CUDA 13.0, Ubuntu 24.04 (SBSA architecture)
 ARG PYTORCH_INDEX_thor=https://pypi.jetson-ai-lab.io/sbsa/cu130
-ARG PYTORCH_PKGS_thor="torch==2.9.1 torchvision==0.24.1 torchaudio"
+ARG PYTORCH_PKGS_thor="torch==2.9.1 torchvision torchaudio"
 ARG INSTALL_FLASH_ATTN_thor=true
 ARG DEFAULT_CONFIG_thor=configs/thor-sota.yaml
 ARG EXTRAS_thor=kokoro,nemotron,vision,search
@@ -59,7 +59,7 @@ ARG EXTRAS_nano=whisper,piper,search
 
 # DGX Spark: Blackwell GB10, CUDA 13.0, Ubuntu 24.04 (SBSA wheels — same as Thor)
 ARG PYTORCH_INDEX_spark=https://pypi.jetson-ai-lab.io/sbsa/cu130
-ARG PYTORCH_PKGS_spark="torch==2.9.1 torchvision==0.24.1 torchaudio"
+ARG PYTORCH_PKGS_spark="torch==2.9.1 torchvision torchaudio"
 ARG INSTALL_FLASH_ATTN_spark=false
 ARG DEFAULT_CONFIG_spark=configs/spark.yaml
 ARG EXTRAS_spark=kokoro,nemotron,vision,search
