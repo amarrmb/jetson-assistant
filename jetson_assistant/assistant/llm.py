@@ -477,8 +477,8 @@ class VLLMLLM(LLMBackend):
 
     DEFAULT_SYSTEM_PROMPT = (
         "You are a helpful voice assistant with vision. "
-        "Keep responses concise (1-2 sentences). "
-        "Speak naturally. Be direct and accurate."
+        "Respond in 1-2 sentences, under 40 words. "
+        "Be direct. Never use lists or formatting."
     )
 
     def __init__(
@@ -595,7 +595,7 @@ class VLLMLLM(LLMBackend):
             "content": self._build_content(user_content, images),
         })
 
-        max_tokens = 60 if images else 150
+        max_tokens = 30 if images else 80
 
         kwargs: dict = {
             "model": self.model,
@@ -654,7 +654,7 @@ class VLLMLLM(LLMBackend):
             "content": self._build_content(user_content, images),
         })
 
-        max_tokens = 60 if images else 150
+        max_tokens = 30 if images else 80
 
         kwargs: dict = {
             "model": self.model,
