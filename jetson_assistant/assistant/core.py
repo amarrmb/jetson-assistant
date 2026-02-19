@@ -2365,6 +2365,25 @@ class VoiceAssistant:
         except Exception:
             pass  # Don't let acknowledgment failures block the actual work
 
+    def _play_chunk(self, audio_data: np.ndarray, sample_rate: int) -> None:
+        """Route an audio chunk to the appropriate output.
+
+        Handles both browser WebSocket delivery (via ``_vision_preview``) and
+        local speaker playback (via ``audio_output``).  Audio is converted to
+        int16 when sending to the browser.
+        """
+        if self._vision_preview and self._vision_preview.has_browser_client:
+            # Convert to int16 for browser delivery
+            if audio_data.dtype != np.int16:
+                if audio_data.dtype in (np.float32, np.float64):
+                    audio_data = (audio_data * 32767).astype(np.int16)
+                else:
+                    audio_data = audio_data.astype(np.int16)
+            self._vision_preview.queue_tts_audio(audio_data, sample_rate)
+            time.sleep(len(audio_data) / sample_rate)
+        else:
+            self.audio_output.play_blocking(audio_data, sample_rate)
+
     def _tts_worker(self):
         """Background thread: synthesize and play queued sentences.
 
@@ -2373,8 +2392,19 @@ class VoiceAssistant:
         ``audio_output.play_blocking``.  Barge-in is checked both before
         synthesis and before playback so interrupted turns are skipped quickly.
 
+        When the TTS backend supports streaming, audio chunks (~50ms each) are
+        played as they arrive from ``engine.synthesize_stream()``, reducing
+        time-to-first-audio from ~172ms to ~50ms.  The full audio is cached
+        after all chunks have been played.
+
         Send ``None`` as a sentinel to shut the worker down.
         """
+        # Check once whether the TTS backend supports streaming.
+        # Use ``is True`` to guard against mock objects whose attributes are
+        # truthy but not actually the boolean True.
+        backend = getattr(self.engine, '_tts_backend', None)
+        can_stream = backend is not None and getattr(backend, 'supports_streaming', False) is True
+
         while True:
             item = self._tts_queue.get()
             if item is None:
@@ -2393,29 +2423,42 @@ class VoiceAssistant:
                 if cached:
                     audio_data, sample_rate = cached.audio, cached.sample_rate
                 else:
-                    tts_result = self.engine.synthesize(
-                        sentence, voice=voice, language=lang,
-                    )
-                    audio_data = tts_result.audio
-                    sample_rate = tts_result.sample_rate
-                    self._tts_cache.put(sentence, voice, lang, audio_data, sample_rate)
+                    if can_stream:
+                        # Stream: play chunks as they arrive for lower TTFA
+                        all_chunks = []
+                        for chunk in self.engine.synthesize_stream(
+                            sentence, voice=voice, language=lang,
+                        ):
+                            if self._bargein_event.is_set():
+                                break
+                            all_chunks.append(chunk)
+                            self._play_chunk(chunk.audio, chunk.sample_rate)
+
+                        # Cache the concatenated audio for subsequent replays
+                        if all_chunks and not self._bargein_event.is_set():
+                            full_audio = np.concatenate([c.audio for c in all_chunks])
+                            sr = all_chunks[0].sample_rate
+                            self._tts_cache.put(sentence, voice, lang, full_audio, sr)
+
+                        # Stream sentence to transcript overlay
+                        if self._vision_preview is not None:
+                            self._vision_preview.add_transcript_stream(sentence)
+                        continue  # Already played chunks inline; skip to next item
+                    else:
+                        # Non-streaming fallback: synthesize full sentence
+                        tts_result = self.engine.synthesize(
+                            sentence, voice=voice, language=lang,
+                        )
+                        audio_data = tts_result.audio
+                        sample_rate = tts_result.sample_rate
+                        self._tts_cache.put(sentence, voice, lang, audio_data, sample_rate)
 
                 # Check barge-in again after (potentially slow) synthesis
                 if self._bargein_event.is_set():
                     continue
 
-                # Route audio: browser WebSocket or local playback
-                if self._vision_preview and self._vision_preview.has_browser_client:
-                    # Convert to int16 for browser delivery
-                    if audio_data.dtype != np.int16:
-                        if audio_data.dtype in (np.float32, np.float64):
-                            audio_data = (audio_data * 32767).astype(np.int16)
-                        else:
-                            audio_data = audio_data.astype(np.int16)
-                    self._vision_preview.queue_tts_audio(audio_data, sample_rate)
-                    time.sleep(len(audio_data) / sample_rate)
-                else:
-                    self.audio_output.play_blocking(audio_data, sample_rate)
+                # Play full audio (cache hit or non-streaming synthesis)
+                self._play_chunk(audio_data, sample_rate)
 
                 # Stream sentence to transcript overlay
                 if self._vision_preview is not None:
