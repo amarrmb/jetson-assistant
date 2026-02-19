@@ -29,10 +29,13 @@ cryptography>=41.0
 # --- TTS: Kokoro ---
 kokoro>=0.9.4
 soundfile>=0.12.0
+misaki[zh]
+misaki[ja]
 
 # --- STT: Nemotron ---
 nemo_toolkit[asr]>=2.0.0,<2.6.2
 lhotse<1.31
+ordered-set>=4.1.0
 
 # --- Vision ---
 opencv-python-headless>=4.8.0

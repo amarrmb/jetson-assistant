@@ -69,7 +69,7 @@ _TRANSCRIPT_HTML = """<!DOCTYPE html>
   <div class="chat-header">
     <h1>jetson-assistant</h1>
     <p>On-device voice AI &mdash; Jetson Thor</p>
-    <button id="clear-btn" onclick="document.getElementById('msgs').innerHTML=''" style="position:absolute;right:24px;top:20px;background:#1e1e1e;border:1px solid #333;color:#888;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;">Clear</button>
+    <button id="clear-btn" onclick="fetch('/clear',{method:'POST'}).then(()=>{document.getElementById('msgs').innerHTML='';document.getElementById('debug-panel').innerHTML='';})" style="position:absolute;right:24px;top:20px;background:#1e1e1e;border:1px solid #333;color:#888;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;">Clear</button>
   </div>
   <div class="chat-messages" id="msgs"></div>
   <div class="pipeline">
@@ -78,9 +78,18 @@ _TRANSCRIPT_HTML = """<!DOCTYPE html>
     <div class="pipe-stage" id="ps-tts"><span class="label">TTS</span><span class="val" id="pv-tts">--</span></div>
     <span class="badge">STREAMING</span>
   </div>
+  <div id="cert-help" style="display:none;background:#2a1a00;border:1px solid #f59e0b;color:#fbbf24;padding:10px 14px;margin:0 12px 8px;border-radius:8px;font-size:12px;line-height:1.5;">
+    <strong>iOS/Mobile:</strong> Mic requires a trusted certificate.<br>
+    1. Download <a href="/cert" style="color:#60a5fa;text-decoration:underline;">jetson-assistant.pem</a><br>
+    2. Install: Settings &gt; General &gt; VPN &amp; Device Management<br>
+    3. Trust: Settings &gt; General &gt; About &gt; Certificate Trust Settings<br>
+    4. Reload this page and try again.
+  </div>
+  <div id="debug-panel" style="display:none;background:#0a0a0a;border-top:1px solid #333;max-height:200px;overflow-y:auto;font-family:monospace;font-size:11px;padding:6px 10px;"></div>
   <div class="status">
     <div class="dot" id="dot"></div>
     <span id="status">Connected</span>
+    <button id="debug-btn" style="background:#1e1e1e;border:1px solid #333;color:#666;padding:4px 8px;border-radius:4px;font-size:10px;cursor:pointer;margin-left:8px;">DBG</button>
     <button id="mic-btn" style="margin-left:auto;background:#1e1e1e;border:1px solid #333;color:#e0e0e0;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;">&#127908; Connect Audio</button>
   </div>
 </div>
@@ -91,8 +100,26 @@ const status = document.getElementById('status');
 const es = new EventSource('/events');
 let streamEl = null;
 let streamText = '';
+const debugPanel = document.getElementById('debug-panel');
+const debugBtn = document.getElementById('debug-btn');
+let debugVisible = false;
+debugBtn.onclick = () => {
+  debugVisible = !debugVisible;
+  debugPanel.style.display = debugVisible ? 'block' : 'none';
+  debugBtn.style.color = debugVisible ? '#22c55e' : '#666';
+};
+const stageColors = {intent:'#60a5fa',llm_raw:'#a78bfa',tool_call:'#f59e0b',tool_result:'#22c55e',vision_fallback:'#ef4444',summarize_input:'#818cf8',summarize_output:'#34d399',summarize_error:'#ef4444'};
 es.onmessage = (e) => {
   const d = JSON.parse(e.data);
+  if (d.type === 'debug') {
+    const color = stageColors[d.stage] || '#888';
+    const line = document.createElement('div');
+    line.style.cssText = 'margin:2px 0;word-break:break-all;';
+    line.innerHTML = '<span style="color:' + color + ';font-weight:bold;">[' + d.stage + ']</span> <span style="color:#ccc;">' + d.ts + '</span> ' + d.data.replace(/</g,'&lt;');
+    debugPanel.appendChild(line);
+    debugPanel.scrollTop = debugPanel.scrollHeight;
+    return;
+  }
   if (d.type === 'timing') {
     const el = document.getElementById('pv-' + d.stage);
     const ps = document.getElementById('ps-' + d.stage);
@@ -182,6 +209,11 @@ micBtn.onclick = async () => {
       processor.connect(audioCtx.destination);
     } catch (err) {
       status.textContent = 'Mic error: ' + err.message;
+      // Show cert install help for iOS/mobile (self-signed cert not trusted)
+      if (err.name === 'NotAllowedError' || err.message.includes('not allowed')) {
+        const help = document.getElementById('cert-help');
+        if (help) help.style.display = 'block';
+      }
       ws.close();
     }
   };
@@ -589,6 +621,8 @@ class VisionPreview:
         self._audio_callback: Optional[Callable] = None  # core.py _on_audio_chunk
         self._tts_audio_queue: queue.Queue = queue.Queue()
         self._aio_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._cert_pem: Optional[bytes] = None  # self-signed cert for /cert download
+        self._clear_callback: Optional[Callable] = None  # core.py clear_conversation
 
     def add_transcript(self, role: str, text: str) -> None:
         """Append a transcript entry (thread-safe, used from core.py)."""
@@ -613,6 +647,19 @@ class VisionPreview:
         self._transcript_id += 1
         entry = {"id": self._transcript_id, "type": "timing",
                  "stage": stage, "ms": round(ms)}
+        self._transcript.append(entry)
+        if len(self._transcript) > 100:
+            self._transcript = self._transcript[-100:]
+
+    def add_debug(self, stage: str, data: str) -> None:
+        """Append a debug event for the pipeline debug panel.
+
+        Stages: 'stt', 'intent', 'llm_prompt', 'llm_raw', 'tool_call',
+                'tool_result', 'vision_fallback', 'summary', 'final'.
+        """
+        self._transcript_id += 1
+        entry = {"id": self._transcript_id, "type": "debug",
+                 "stage": stage, "data": data, "ts": time.strftime("%H:%M:%S")}
         self._transcript.append(entry)
         if len(self._transcript) > 100:
             self._transcript = self._transcript[-100:]
@@ -974,6 +1021,9 @@ class VisionPreview:
                     serialization.NoEncryption(),
                 )
 
+                # Store cert PEM so /cert endpoint can serve it for iOS install
+                preview._cert_pem = cert_pem
+
                 cert_file = tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
                 cert_file.write(cert_pem)
                 cert_file.close()
@@ -994,12 +1044,35 @@ class VisionPreview:
                 )
                 return None
 
+        async def handle_clear(request):
+            """Clear conversation history and transcript."""
+            preview._transcript.clear()
+            preview._transcript_id = 0
+            if preview._clear_callback:
+                preview._clear_callback()
+            logger.info("Conversation and transcript cleared via /clear")
+            return web.json_response({"status": "cleared"})
+
+        async def handle_cert(request):
+            """Serve the self-signed TLS certificate for iOS/mobile install."""
+            if not hasattr(preview, '_cert_pem') or preview._cert_pem is None:
+                return web.Response(text="No certificate available", status=404)
+            return web.Response(
+                body=preview._cert_pem,
+                content_type="application/x-pem-file",
+                headers={
+                    "Content-Disposition": "attachment; filename=jetson-assistant.pem",
+                },
+            )
+
         async def _run_server():
             app = web.Application()
             app.router.add_get("/", handle_root)
             app.router.add_get("/video", handle_video)
             app.router.add_get("/events", handle_events)
             app.router.add_get("/ws", handle_ws)
+            app.router.add_get("/cert", handle_cert)
+            app.router.add_post("/clear", handle_clear)
 
             ssl_ctx = _make_ssl_context()
 

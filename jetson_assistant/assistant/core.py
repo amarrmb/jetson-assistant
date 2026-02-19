@@ -776,7 +776,13 @@ class VoiceAssistant:
             stream_port=self.config.stream_vision_port,
         )
         self._vision_preview.set_audio_callback(self._on_audio_chunk)
+        self._vision_preview._clear_callback = lambda: self.clear_conversation()
         self._vision_preview.start()
+
+    def _emit_debug(self, stage: str, data: str) -> None:
+        """Send debug info to the transcript page debug panel."""
+        if self._vision_preview is not None and hasattr(self._vision_preview, 'add_debug'):
+            self._vision_preview.add_debug(stage, data[:500])
 
     def _update_preview(self, **kwargs) -> None:
         """Update vision preview overlay with current state info.
@@ -1977,7 +1983,13 @@ class VoiceAssistant:
             ):
                 vision_future = self._capture_vision_async()
 
-            context = self._get_conversation("local")[-self.config.conversation_history * 2 :]
+            # Use fewer history turns when tools are active — the tool system
+            # prompt is large and 7B models lose instruction-following with
+            # too much context.
+            max_turns = self.config.conversation_history
+            if self._tools and self._tools.definitions() and max_turns > 3:
+                max_turns = 3
+            context = self._get_conversation("local")[-max_turns * 2 :]
 
             # Intent router: fast LLM classification (~90ms) decides whether
             # to attach a camera frame. TOOL queries get text-only (tools
@@ -1985,6 +1997,7 @@ class VoiceAssistant:
             # Only legacy mode (no tools) uses regex-based vision gating.
             images = None
             intent = self._classify_intent(user_text)
+            self._emit_debug("intent", f"{intent} | visual_regex={self._has_visual_intent(user_text)} | context_turns={len(context)//2}")
             if self.config.verbose:
                 router_ms = (time.perf_counter() - time.perf_counter()) if intent == "CHAT" else 0
                 logger.debug("Router: %s", intent)
@@ -2089,10 +2102,13 @@ class VoiceAssistant:
                 tool_results = []
                 buffer_mode = None  # None=undecided, True=tool call, False=speak
                 tool_call_json = None  # Original JSON for conversation history
+                vision_tool_called = False  # Skip summarizer for VLM results
 
                 try:
                     for item in self.llm.generate_stream(user_text, **llm_kwargs):
                         if isinstance(item, ToolCallResult):
+                            if item.name == "check_camera":
+                                vision_tool_called = True
                             result = self._tools.execute(item)
                             if result:
                                 tool_results.append(result)
@@ -2154,6 +2170,7 @@ class VoiceAssistant:
                     self._tts_queue.join()
 
                 response_text = " ".join(full_response) if full_response else ""
+                self._emit_debug("llm_raw", f"buffer_mode={buffer_mode} | {response_text[:300]}")
 
                 # Tool call detection — only when we buffered (or empty response)
                 if buffer_mode is True and self._tools and response_text.strip():
@@ -2168,8 +2185,30 @@ class VoiceAssistant:
                     if tool_result is not None:
                         had_tool_calls = True
                         tool_call_json = stripped  # Preserve for conversation history
+                        if '"check_camera"' in stripped:
+                            vision_tool_called = True
                         tool_results.append(tool_result)
+                        self._emit_debug("tool_call", f"{stripped[:200]}")
+                        self._emit_debug("tool_result", f"{tool_result[:300]}")
                         response_text = ""
+
+                # Vision fallback: if the LLM didn't call check_camera but the
+                # user clearly asked a visual question, force-call it. Small LLMs
+                # (7B) often ignore tool instructions for visual queries.
+                if not had_tool_calls and self._tools and self._has_visual_intent(user_text):
+                    registered = {d["function"]["name"] for d in self._tools.definitions()}
+                    if "check_camera" in registered:
+                        self._emit_debug("vision_fallback", f"Forcing check_camera (LLM didn't call it)")
+                        logger.info("Vision fallback: forcing check_camera for '%s'", user_text[:60])
+                        fallback_json = '{"tool": "check_camera", "args": {"camera_name": "local", "question": "' + user_text.replace('"', '\\"') + '"}}'
+                        fallback_result = self._try_parse_tool_call(fallback_json)
+                        if fallback_result:
+                            had_tool_calls = True
+                            vision_tool_called = True
+                            tool_call_json = fallback_json  # Store JSON, not VLM description
+                            tool_results.append(fallback_result)
+                            self._emit_debug("tool_result", f"{fallback_result[:300]}")
+                            response_text = ""
 
                 # If model called tools, decide whether to speak the result
                 if had_tool_calls:
@@ -2185,19 +2224,27 @@ class VoiceAssistant:
 
                     if not raw_result or is_action:
                         response_text = ""
+                    elif vision_tool_called:
+                        # Vision results are already concise VLM descriptions —
+                        # speak directly. Do NOT run through text summarizer
+                        # (it adds "Search results show..." artifacts).
+                        response_text = raw_result
                     elif len(raw_result) > 80 and hasattr(self.llm, '_client'):
                         # Summarize long results (search snippets, etc.)
+                        self._emit_debug("summarize_input", f"Q: {user_text} | Facts ({len(raw_result)} chars): {raw_result[:400]}")
                         t_sum = time.perf_counter()
                         try:
                             resp = self.llm._client.chat.completions.create(
                                 model=self.llm.model,
                                 messages=[{"role": "user", "content":
-                                    f"Q: {user_text}\nFacts: {raw_result[:500]}\nAnswer the question in 2 short sentences using ONLY facts above. Be specific and relevant:"}],
-                                max_tokens=80,
+                                    f"Question: {user_text}\n\nSearch results:\n{raw_result[:1200]}\n\nAnswer the question in 1-2 short sentences using ONLY the search results above. Include specific numbers, names, and dates. If the results don't answer the question, say so:"}],
+                                max_tokens=100,
                                 temperature=0,
                             )
                             response_text = resp.choices[0].message.content.strip()
-                        except Exception:
+                            self._emit_debug("summarize_output", response_text)
+                        except Exception as exc:
+                            self._emit_debug("summarize_error", str(exc))
                             response_text = raw_result
                         if self.config.verbose:
                             logger.debug("  Summary: %.0fms", (time.perf_counter() - t_sum) * 1000)
@@ -2245,6 +2292,17 @@ class VoiceAssistant:
                     if not response_text and response.tool_calls:
                         response_text = " ".join(tool_results) if tool_results else "Got it."
 
+                # Vision fallback (non-streaming): same as streaming path
+                if not tool_results and self._tools and self._has_visual_intent(user_text):
+                    registered = {d["function"]["name"] for d in self._tools.definitions()}
+                    if "check_camera" in registered:
+                        logger.info("Vision fallback: forcing check_camera for '%s'", user_text[:60])
+                        fallback_json = '{"tool": "check_camera", "args": {"camera_name": "local", "question": "' + user_text.replace('"', '\\"') + '"}}'
+                        fallback_result = self._try_parse_tool_call(fallback_json)
+                        if fallback_result:
+                            tool_call_json = fallback_json  # Store JSON, not VLM description
+                            response_text = fallback_result
+
                 # Speak response sentence-by-sentence (supports barge-in)
                 self._speak_sentences(response_text)
 
@@ -2253,9 +2311,9 @@ class VoiceAssistant:
             if self._vision_preview is not None:
                 self._vision_preview.add_transcript("assistant", response_text)
 
-            # Update conversation history — when tools were called, store the
-            # JSON tool call (not the result text) so the LLM sees the correct
-            # output pattern in subsequent turns and keeps outputting JSON.
+            # Update conversation history — store tool call JSON so the LLM
+            # sees the correct output pattern and keeps emitting JSON for tools.
+            # Context degradation is handled by the 3-turn limit above.
             self._get_conversation("local").append({"role": "user", "content": user_text})
             if tool_call_json:
                 self._get_conversation("local").append({"role": "assistant", "content": tool_call_json})

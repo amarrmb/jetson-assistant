@@ -56,6 +56,8 @@ piper = [
 kokoro = [
     "kokoro>=0.9.4",
     "soundfile>=0.12.0",
+    "misaki[zh]",  # Chinese phonemizer for Kokoro
+    "misaki[ja]",  # Japanese phonemizer for Kokoro
 ]
 
 # STT backends
@@ -68,6 +70,7 @@ sensevoice = [
 nemotron = [
     "nemo_toolkit[asr]>=2.0.0,<2.6.2",  # 2.6.2 has CUDA stream capture bug on Jetson
     "lhotse<1.31",  # 1.31+ breaks NeMo's DynamicCutSampler __init__ signature
+    "ordered-set>=4.1.0",  # transitive dep not always pulled in by nemo/lhotse
 ]
 
 # UI & tools

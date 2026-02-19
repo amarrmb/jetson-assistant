@@ -189,12 +189,12 @@ def _register_always_available(registry: ToolRegistry, context: dict) -> None:
         "Switch the assistant's spoken language. Use when the user asks you to "
         "speak in a different language, respond in Hindi, switch to English, "
         "talk in Japanese, etc. Supported: english, hindi, japanese, chinese, "
-        "korean, french, spanish, portuguese."
+        "french, spanish, portuguese."
     )
     def set_language(
         language: Annotated[str, (
             "Language to switch to: 'english', 'hindi', 'japanese', 'chinese', "
-            "'korean', 'french', 'spanish', 'portuguese'"
+            "'french', 'spanish', 'portuguese'"
         )],
     ) -> str:
         lang_map = {
@@ -278,33 +278,32 @@ def _register_always_available(registry: ToolRegistry, context: dict) -> None:
 
         try:
             from datetime import datetime
-            # Add current date context for recency
             date_str = datetime.now().strftime("%B %Y")
 
-            # Try news search first (better for "latest news" queries)
             ddgs = DDGS()
-            results = list(ddgs.news(query, max_results=3))
 
-            # Fallback to text search if news returns nothing
+            # Text search is primary — better for factual queries (medal counts,
+            # scores, "who won X"). Append date for recency.
+            results = list(ddgs.text(f"{query} {date_str}", max_results=5))
+
+            # Fallback to news search if text returns nothing
             if not results:
-                results = list(ddgs.text(f"{query} {date_str}", max_results=3))
+                results = list(ddgs.news(query, max_results=5))
 
             if not results:
                 return f"No results found for '{query}'."
 
-            # Return top result in speech-friendly format.
-            # Keep it short to avoid LLM re-summarization (which hallucinates).
-            r = results[0]
-            title = r.get("title", "")
-            body = r.get("body", r.get("description", ""))
-            # Trim body to ~1 sentence for clean TTS
-            if len(body) > 200:
-                cut = body[:200].rfind(". ")
-                if cut > 50:
-                    body = body[:cut + 1]
-                else:
-                    body = body[:200]
-            return f"{title}. {body}"
+            # Return top 3 results so the LLM summarizer has enough facts.
+            # The summarization step in core.py condenses this for TTS.
+            parts = []
+            for r in results[:3]:
+                title = r.get("title", "")
+                body = r.get("body", r.get("description", ""))
+                if body:
+                    parts.append(f"{title}: {body}")
+                elif title:
+                    parts.append(title)
+            return "\n".join(parts) if parts else f"No useful results for '{query}'."
         except Exception as e:
             return f"Search failed: {e}"
 
