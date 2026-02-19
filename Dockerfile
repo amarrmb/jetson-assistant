@@ -127,6 +127,7 @@ RUN EXTRAS=$(eval echo \${EXTRAS_${PLATFORM}}) && \
     pip install --no-cache-dir --break-system-packages \
         -e ".[${EXTRAS}]" \
         sounddevice>=0.4.6 webrtcvad>=2.0.10 ollama>=0.2.0 openai>=1.0 \
+        aiohttp>=3.9 cryptography>=41.0 "duckduckgo-search>=7.0" \
         "setuptools<82"
 
 # Pre-download spacy model (Kokoro TTS dependency, ~13MB)
