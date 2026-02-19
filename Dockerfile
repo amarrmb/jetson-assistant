@@ -37,8 +37,10 @@ ARG PLATFORM=thor
 # ── Platform-specific build args ─────────────────────────────────────
 
 # Thor: JetPack 7, CUDA 13.0, Ubuntu 24.04 (SBSA architecture)
+# Pin torch 2.9.1 + torchaudio 2.9.1 — flash-attn wheel requires 2.9.x ABI.
+# No torchvision — SBSA index only has 0.25.0 (needs torch 2.10), not used by us.
 ARG PYTORCH_INDEX_thor=https://pypi.jetson-ai-lab.io/sbsa/cu130
-ARG PYTORCH_PKGS_thor="torch==2.9.1 torchvision torchaudio"
+ARG PYTORCH_PKGS_thor="torch==2.9.1 torchaudio==2.9.1"
 ARG INSTALL_FLASH_ATTN_thor=true
 ARG DEFAULT_CONFIG_thor=configs/thor-sota.yaml
 ARG EXTRAS_thor=kokoro,nemotron,vision,search
@@ -58,8 +60,9 @@ ARG DEFAULT_CONFIG_nano=configs/nano.yaml
 ARG EXTRAS_nano=whisper,piper,search
 
 # DGX Spark: Blackwell GB10, CUDA 13.0, Ubuntu 24.04 (SBSA wheels — same as Thor)
+# Same SBSA constraint as Thor: pin to 2.9.1, no torchvision.
 ARG PYTORCH_INDEX_spark=https://pypi.jetson-ai-lab.io/sbsa/cu130
-ARG PYTORCH_PKGS_spark="torch==2.9.1 torchvision torchaudio"
+ARG PYTORCH_PKGS_spark="torch==2.9.1 torchaudio==2.9.1"
 ARG INSTALL_FLASH_ATTN_spark=false
 ARG DEFAULT_CONFIG_spark=configs/spark.yaml
 ARG EXTRAS_spark=kokoro,nemotron,vision,search
@@ -102,6 +105,15 @@ RUN PYTORCH_INDEX=$(eval echo \${PYTORCH_INDEX_${PLATFORM}}) && \
     pip install --no-cache-dir --break-system-packages \
         ${PYTORCH_PKGS} \
         --index-url ${PYTORCH_INDEX}
+
+# SBSA PyTorch wheels (Thor/Spark) link against libcupti but the runtime
+# base image doesn't include it. Install from CUDA apt repo.
+# L4T base images (Orin/Nano) already have CUPTI via JetPack.
+RUN if [ "${PLATFORM}" = "thor" ] || [ "${PLATFORM}" = "spark" ]; then \
+        apt-get update && \
+        apt-get install -y --no-install-recommends cuda-cupti-13-0 && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # ── 2. Flash-attn (Thor only — pre-built wheel for sm_110) ──────────
 # Orin/Nano skip this step — they use SDPA attention instead.
