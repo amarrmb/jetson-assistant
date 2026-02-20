@@ -3,7 +3,8 @@ Nemotron Speech STT backend implementation.
 
 Uses NVIDIA's Nemotron Speech 0.6B streaming model for fast,
 accurate English transcription. Runs natively on CUDA without
-a container — ~24ms latency on Jetson Thor.
+a container — ~76ms latency on Jetson Thor (NeMo batch API;
+~6ms theoretical floor, overhead-bound by Lhotse dataloader).
 """
 
 import logging
