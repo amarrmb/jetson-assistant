@@ -623,6 +623,7 @@ class VisionPreview:
         self._aio_loop: Optional[asyncio.AbstractEventLoop] = None
         self._cert_pem: Optional[bytes] = None  # self-signed cert for /cert download
         self._clear_callback: Optional[Callable] = None  # core.py clear_conversation
+        self._browser_frame_jpeg: Optional[bytes] = None  # latest JPEG from browser webcam
 
     def add_transcript(self, role: str, text: str) -> None:
         """Append a transcript entry (thread-safe, used from core.py)."""
@@ -678,6 +679,7 @@ class VisionPreview:
     def queue_tts_audio(self, audio: np.ndarray, sample_rate: int) -> None:
         """Queue TTS audio for delivery to browser. Called from core.py speech thread."""
         if not self.has_browser_client:
+            logger.debug("queue_tts_audio: no browser client, discarding %d samples", len(audio))
             return
         if audio.dtype != np.int16:
             if audio.dtype in (np.float32, np.float64):
@@ -686,7 +688,10 @@ class VisionPreview:
                 audio = audio.astype(np.int16)
         # Pack: 4 bytes sample_rate (little-endian uint32) + raw int16 PCM
         header = struct.pack("<I", sample_rate)
-        self._tts_audio_queue.put(header + audio.tobytes())
+        payload = header + audio.tobytes()
+        self._tts_audio_queue.put(payload)
+        logger.debug("queue_tts_audio: queued %d samples (%d bytes), qsize=%d",
+                      len(audio), len(payload), self._tts_audio_queue.qsize())
 
     def set_overlay(self, lines: list[str]) -> None:
         """Update the overlay text lines (thread-safe)."""
@@ -908,6 +913,15 @@ class VisionPreview:
             preview._browser_ws = ws
             logger.info("Browser audio connected from %s", request.remote)
 
+            # Auto-clear on new connection — each browser session starts fresh.
+            # This prevents prior conversation history from leaking between
+            # sessions (security) and ensures a clean state.
+            preview._transcript.clear()
+            preview._transcript_id = 0
+            if preview._clear_callback:
+                preview._clear_callback()
+            logger.info("Session auto-cleared for new browser connection")
+
             # Send config
             await ws.send_json({
                 "type": "config",
@@ -930,13 +944,17 @@ class VisionPreview:
                 while not ws.closed:
                     try:
                         data = await loop.run_in_executor(
-                            None, lambda: preview._tts_audio_queue.get(timeout=0.2)
+                            None, lambda: preview._tts_audio_queue.get(timeout=0.05)
                         )
                         await ws.send_bytes(data)
                     except queue.Empty:
                         pass
-                    except (ConnectionResetError, ConnectionError):
-                        break
+                    except Exception as exc:
+                        # Catch ALL exceptions (not just Connection*) to prevent
+                        # silent disconnection that makes has_browser_client False
+                        # and routes all subsequent TTS to non-existent local speaker.
+                        logger.warning("send_loop error (will retry): %s", exc)
+                        await asyncio.sleep(0.1)
 
             try:
                 await asyncio.gather(recv_loop(), send_loop())
@@ -1044,6 +1062,14 @@ class VisionPreview:
                 )
                 return None
 
+        async def handle_frame(request):
+            """Accept a JPEG frame from the browser webcam (POST /frame)."""
+            body = await request.read()
+            if body:
+                preview._latest_jpeg = body
+                preview._browser_frame_jpeg = body
+            return web.Response(text="ok")
+
         async def handle_clear(request):
             """Clear conversation history and transcript."""
             preview._transcript.clear()
@@ -1073,6 +1099,7 @@ class VisionPreview:
             app.router.add_get("/ws", handle_ws)
             app.router.add_get("/cert", handle_cert)
             app.router.add_post("/clear", handle_clear)
+            app.router.add_post("/frame", handle_frame)
 
             ssl_ctx = _make_ssl_context()
 

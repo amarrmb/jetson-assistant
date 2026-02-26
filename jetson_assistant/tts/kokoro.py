@@ -145,6 +145,19 @@ class KokoroBackend(TTSBackend):
                 a = torch.randn(8, 8, device="cuda")
                 _ = a @ a.T  # triggers cuBLAS
                 logger.info("CUDA matmul probe: OK — Kokoro will use GPU")
+
+                # Blackwell (sm_12x): PyTorch's built-in SDPA Cutlass FMHA
+                # kernels only support sm80-sm100.  On sm121 they spam FATAL
+                # errors and hang TTS synthesis.  Disable them and use the
+                # math SDPA backend (plenty fast for Kokoro's 82M params).
+                cap = torch.cuda.get_device_capability()
+                if cap[0] >= 12:
+                    torch.backends.cuda.enable_flash_sdp(False)
+                    torch.backends.cuda.enable_mem_efficient_sdp(False)
+                    logger.info(
+                        "Disabled flash/efficient SDPA for sm_%d%d — using math backend",
+                        cap[0], cap[1],
+                    )
         except Exception as e:
             self._force_cpu = True
             logger.info("CUDA matmul probe failed (%s) — Kokoro will use CPU", e)

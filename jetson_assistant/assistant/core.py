@@ -785,6 +785,12 @@ class VoiceAssistant:
         self._vision_preview._clear_callback = lambda: self.clear_conversation()
         self._vision_preview.start()
 
+        # Register browser webcam as "local" camera if no USB camera available.
+        # Browser POSTs JPEG frames to /frame → stored in _browser_frame_jpeg.
+        if self._camera_pool is not None and not self._camera_pool.has("local"):
+            self._camera_pool.add_browser(self._vision_preview)
+            logger.info("CameraPool: registered browser webcam as 'local'")
+
     def _emit_debug(self, stage: str, data: str) -> None:
         """Send debug info to the transcript page debug panel."""
         if self._vision_preview is not None and hasattr(self._vision_preview, 'add_debug'):
@@ -1450,6 +1456,10 @@ class VoiceAssistant:
                         import cv2
                         _, buf = cv2.imencode(".jpg", phone_frame)
                         images = [base64.b64encode(buf).decode()]
+                    elif self._camera_pool.has("local"):
+                        frame_b64 = self._camera_pool.capture_base64("local")
+                        if frame_b64:
+                            images = [frame_b64]
                     elif self.camera is not None and self.camera.is_open:
                         with self._camera_lock:
                             frame_b64 = self.camera.capture_base64()
@@ -1735,7 +1745,33 @@ class VoiceAssistant:
         Implements the state machine.
         """
         if self.state == AssistantState.SPEAKING:
-            # Suppress all mic processing during playback.
+            # Browser clients: barge-in is safe (no speaker→mic echo loop).
+            # Detect speech via VAD and fire the barge-in event to stop TTS.
+            if self._vision_preview and self._vision_preview.has_browser_client:
+                rms = float(np.sqrt(np.mean(audio ** 2)))
+                if rms > 0.02:  # ~-34dB — moderate speech threshold
+                    logger.info("Browser barge-in detected (RMS=%.3f)", rms)
+                    self._bargein_event.set()
+                    # Drain TTS queue so worker stops after current chunk
+                    while not self._tts_queue.empty():
+                        try:
+                            self._tts_queue.get_nowait()
+                            self._tts_queue.task_done()
+                        except Exception:
+                            break
+                    # Drain audio output queue so browser stops receiving
+                    if self._vision_preview:
+                        while not self._vision_preview._tts_audio_queue.empty():
+                            try:
+                                self._vision_preview._tts_audio_queue.get_nowait()
+                            except Exception:
+                                break
+                    self._set_state(AssistantState.LISTENING)
+                    self._audio_buffer = [audio.copy()]
+                    self._listen_start_time = time.time()
+                    self.vad.reset()
+                return
+            # Local mic: suppress all processing during playback.
             # Without hardware AEC, the speaker echo easily exceeds any
             # reasonable barge-in threshold and kills aplay mid-sentence.
             return
@@ -2106,6 +2142,15 @@ class VoiceAssistant:
 
                 had_tool_calls = False
                 tool_results = []
+                # For visual-intent queries, force buffer mode so the LLM's
+                # response is NOT streamed to TTS.  Small LLMs (7B) often
+                # ignore tool instructions and generate a text refusal like
+                # "I can't see".  Buffering lets the vision_fallback at the
+                # end replace the refusal before anything is spoken.
+                force_buffer = (
+                    self._tools
+                    and self._has_visual_intent(user_text)
+                )
                 buffer_mode = None  # None=undecided, True=tool call, False=speak
                 tool_call_json = None  # Original JSON for conversation history
                 vision_tool_called = False  # Skip summarizer for VLM results
@@ -2141,6 +2186,15 @@ class VoiceAssistant:
                             )
                             if self._tools and looks_like_tool:
                                 buffer_mode = True
+                            elif force_buffer:
+                                # Visual-intent query but LLM didn't emit a tool
+                                # call.  Abort the stream — the vision fallback
+                                # after the loop will call check_camera directly,
+                                # saving the 15-20s the LLM would waste on a
+                                # text refusal like "I can't see".
+                                logger.info("Early-abort: visual query but LLM is not calling tool, will use vision fallback")
+                                buffer_mode = True
+                                break
                             else:
                                 buffer_mode = False
                                 if self.config.verbose:
@@ -2159,8 +2213,7 @@ class VoiceAssistant:
                             break
 
                         if sentence_count == 1 and self.config.verbose:
-                            if self._vision_preview is not None:
-                                self._vision_preview.add_timing("tts", 0)  # TTS starts immediately via queue
+                            self._tts_timing_start = time.perf_counter()
 
                         self._tts_queue.put((
                             sentence,
@@ -2371,6 +2424,10 @@ class VoiceAssistant:
         Handles both browser WebSocket delivery (via ``_vision_preview``) and
         local speaker playback (via ``audio_output``).  Audio is converted to
         int16 when sending to the browser.
+
+        Large audio arrays are broken into 200ms sub-chunks before queuing to
+        prevent the browser AudioWorklet ring buffer (capacity limited) from
+        overflowing and dropping the beginning of long responses.
         """
         if self._vision_preview and self._vision_preview.has_browser_client:
             # Convert to int16 for browser delivery
@@ -2379,8 +2436,20 @@ class VoiceAssistant:
                     audio_data = (audio_data * 32767).astype(np.int16)
                 else:
                     audio_data = audio_data.astype(np.int16)
-            self._vision_preview.queue_tts_audio(audio_data, sample_rate)
-            time.sleep(len(audio_data) / sample_rate)
+            # Break into 200ms sub-chunks so the browser ring buffer doesn't
+            # overflow when a full sentence (3-5s) arrives as one piece.
+            chunk_samples = int(sample_rate * 0.2)  # 200ms
+            offset = 0
+            while offset < len(audio_data):
+                end = min(offset + chunk_samples, len(audio_data))
+                sub = audio_data[offset:end]
+                self._vision_preview.queue_tts_audio(sub, sample_rate)
+                # Pace at 95% of real-time: browser plays at 1x, we deliver
+                # at ~1.05x.  The 5% margin lets the jitter buffer build
+                # gradually without the "hurried" audio artefact that the
+                # old 75% (1.33x) factor caused.
+                time.sleep(len(sub) / sample_rate * 0.95)
+                offset = end
         else:
             self.audio_output.play_blocking(audio_data, sample_rate)
 
@@ -2432,6 +2501,21 @@ class VoiceAssistant:
                             if self._bargein_event.is_set():
                                 break
                             all_chunks.append(chunk)
+                            if len(all_chunks) == 1 and hasattr(self, "_tts_timing_start"):
+                                tts_ms = (time.perf_counter() - self._tts_timing_start) * 1000
+                                if self._vision_preview is not None:
+                                    self._vision_preview.add_timing("tts", tts_ms)
+                                del self._tts_timing_start
+                            # Feed audio to external tool plugins (e.g. Reachy
+                            # MotionManager) for audio-reactive motion.  Chunks
+                            # are already ~50ms and arrive at real-time pace via
+                            # _play_chunk pacing, so call callbacks inline.
+                            for mod in self._external_tool_modules:
+                                if hasattr(mod, "on_audio_chunk"):
+                                    try:
+                                        mod.on_audio_chunk(chunk.audio, chunk.sample_rate)
+                                    except Exception:
+                                        pass
                             self._play_chunk(chunk.audio, chunk.sample_rate)
 
                         # Cache the concatenated audio for subsequent replays
@@ -2452,10 +2536,18 @@ class VoiceAssistant:
                         audio_data = tts_result.audio
                         sample_rate = tts_result.sample_rate
                         self._tts_cache.put(sentence, voice, lang, audio_data, sample_rate)
+                        if hasattr(self, "_tts_timing_start"):
+                            tts_ms = (time.perf_counter() - self._tts_timing_start) * 1000
+                            if self._vision_preview is not None:
+                                self._vision_preview.add_timing("tts", tts_ms)
+                            del self._tts_timing_start
 
                 # Check barge-in again after (potentially slow) synthesis
                 if self._bargein_event.is_set():
                     continue
+
+                # Feed audio to external tool plugins for motion sync
+                self._notify_audio_playback(audio_data, sample_rate)
 
                 # Play full audio (cache hit or non-streaming synthesis)
                 self._play_chunk(audio_data, sample_rate)
@@ -2530,11 +2622,9 @@ class VoiceAssistant:
             # Feed audio to external tool plugins for motion sync
             self._notify_audio_playback(audio, sr)
 
-            # Route audio: browser WebSocket or local aplay
+            # Route audio: browser WebSocket (chunked) or local aplay
             if self._vision_preview and self._vision_preview.has_browser_client:
-                self._vision_preview.queue_tts_audio(audio, sr)
-                # Sleep for audio duration to maintain state timing
-                time.sleep(len(audio) / sr)
+                self._play_chunk(audio, sr)
             else:
                 tmpf = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
                 wavfile.write(tmpf.name, sr, audio)
@@ -2644,11 +2734,55 @@ class VoiceAssistant:
         return self._get_conversation(session_id).copy()
 
     def clear_conversation(self, session_id: str | None = None) -> None:
-        """Clear conversation history. If session_id is None, clears all sessions."""
+        """Clear conversation history AND stop all in-flight activity.
+
+        This is the nuclear reset — fires barge-in to abort TTS/LLM,
+        drains all queues, and returns to LISTENING state.
+        If session_id is None, clears all sessions.
+        """
+        # 1. Fire barge-in to abort any in-flight LLM streaming + TTS
+        self._bargein_event.set()
+
+        # 2. Drain TTS queue (pending sentences)
+        while not self._tts_queue.empty():
+            try:
+                self._tts_queue.get_nowait()
+                self._tts_queue.task_done()
+            except Exception:
+                break
+
+        # 3. Drain browser audio output queue (buffered PCM)
+        if self._vision_preview:
+            while not self._vision_preview._tts_audio_queue.empty():
+                try:
+                    self._vision_preview._tts_audio_queue.get_nowait()
+                except Exception:
+                    break
+
+        # 4. Kill local aplay if running
+        if self._aplay_proc:
+            try:
+                self._aplay_proc.terminate()
+            except Exception:
+                pass
+
+        # 5. Clear conversation history
         if session_id is None:
             self._conversations.clear()
         elif session_id in self._conversations:
             del self._conversations[session_id]
+
+        # 6. Reset state to LISTENING
+        self._set_state(AssistantState.LISTENING)
+        self._audio_buffer = []
+        self._listen_start_time = time.time()
+        if hasattr(self, 'vad') and self.vad:
+            self.vad.reset()
+
+        # 7. Clear barge-in flag so next utterance works normally
+        self._bargein_event.clear()
+
+        logger.info("Conversation cleared — all activity stopped")
 
 
 def run_assistant(

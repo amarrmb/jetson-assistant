@@ -1,7 +1,7 @@
 # DGX Spark — Best UX, Full Pipeline
 # VRAM: 128GB unified | Target E2E: <700ms
 #
-# 7B VLM + Kokoro TTS + Nemotron STT
+# 72B VLM + Kokoro TTS + Nemotron STT
 # Same pipeline as Thor but on DGX Spark (Blackwell GB10).
 # Uses standard PyTorch (not Jetson AI Lab wheels).
 #
@@ -21,13 +21,13 @@ tts_voice: af_heart
 # STT: Accurate tier (low WER, handles names, ~24ms)
 stt_backend: nemotron
 
-# VLM: Full tier (7B NVFP4 quantized — same as Thor, faster inference)
+# VLM: Full tier (72B AWQ — dramatically better vision + conversation quality)
 llm_backend: vllm
 llm_host: "http://localhost:8001/v1"
-llm_model: "nvidia/Qwen2.5-VL-7B-Instruct-NVFP4"
+llm_model: "Qwen/Qwen2.5-VL-72B-Instruct-AWQ"
 
-# Vision: camera + MJPEG browser stream
-vision_enabled: true
+# Vision: no USB camera on DGX Spark — disable camera, keep stream for audio/transcript
+vision_enabled: false
 stream_vision_port: 9090
 
 # Always listening (no wake word model needed)

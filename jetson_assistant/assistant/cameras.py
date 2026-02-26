@@ -36,6 +36,28 @@ class CameraSource:
     location: str = ""  # Human-readable location hint
 
 
+class BrowserCamera:
+    """Virtual camera backed by browser webcam JPEG frames.
+
+    The browser captures webcam frames and POSTs them as JPEG to /frame.
+    VisionPreview stores the latest JPEG in ``_browser_frame_jpeg``.
+    This wraps that into a ``capture_frame()`` interface compatible with
+    CameraPool (same delegation pattern as RemoteCamera).
+    """
+
+    def __init__(self, vision_preview):
+        self._preview = vision_preview
+
+    def capture_frame(self) -> Optional[np.ndarray]:
+        jpeg = getattr(self._preview, "_browser_frame_jpeg", None)
+        if jpeg is None:
+            return None
+        import cv2
+
+        arr = np.frombuffer(jpeg, dtype=np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+
 class CameraPool:
     """
     Manages multiple named camera connections (USB + RTSP).
@@ -204,6 +226,25 @@ class CameraPool:
         with self._pool_lock:
             return list(self._sources.values())
 
+    def add_browser(self, vision_preview) -> None:
+        """Register browser webcam as ``local`` camera source.
+
+        Uses :class:`BrowserCamera` to decode JPEG frames posted by
+        the browser to ``/frame``.
+        """
+        source = CameraSource(
+            name="local",
+            url="browser:webcam",
+            width=640,
+            height=480,
+            location="Browser webcam",
+        )
+        with self._pool_lock:
+            self._sources["local"] = source
+            if "local" not in self._locks:
+                self._locks["local"] = threading.Lock()
+            self._captures["local"] = BrowserCamera(vision_preview)
+
     def has(self, name: str) -> bool:
         """Check if a camera with the given name exists."""
         return name in self._sources
@@ -279,6 +320,8 @@ class CameraPool:
 
         import base64
 
+        if not self._ensure_cv2():
+            return None
         cv2 = self._cv2
         encode_params = [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
         success, jpeg_buf = cv2.imencode(".jpg", frame, encode_params)

@@ -270,6 +270,8 @@ class OllamaLLM(LLMBackend):
         buffer = ""
         # Match sentence endings: period, !, ?, or colon followed by space/newline
         sentence_pattern = re.compile(r'[.!?:]\s+')
+        clause_pattern = re.compile(r'[,;\u2014]\s+')  # comma, semicolon, em-dash
+        first_chunk_yielded = False
         pending_tool_calls = []
 
         try:
@@ -290,13 +292,17 @@ class OllamaLLM(LLMBackend):
 
                 buffer += content
 
-                # Check for complete sentences - yield as soon as we find one
-                match = sentence_pattern.search(buffer)
+                # First chunk: clause boundary for faster TTFA; then sentence boundary
+                pattern = clause_pattern if not first_chunk_yielded else sentence_pattern
+                match = pattern.search(buffer)
+                if not match and not first_chunk_yielded:
+                    match = sentence_pattern.search(buffer)
                 if match:
                     end_pos = match.end()
                     sentence = buffer[:end_pos].strip()
                     buffer = buffer[end_pos:].strip()
-                    if sentence and len(sentence) > 2:  # Allow short sentences like "No."
+                    if sentence and len(sentence) > 2:
+                        first_chunk_yielded = True
                         yield sentence
 
         except Exception as e:
@@ -595,13 +601,15 @@ class VLLMLLM(LLMBackend):
             "content": self._build_content(user_content, images),
         })
 
-        max_tokens = 30 if images else 80
+        max_tokens = 30 if images else 512
 
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens,
-            "temperature": 0,
+            # temp=0 for vision (deterministic labels), 0.7 for text
+            # (creative responses, avoids RLHF refusal patterns)
+            "temperature": 0 if images else 0.7,
         }
         if tools:
             kwargs["tools"] = tools
@@ -654,20 +662,23 @@ class VLLMLLM(LLMBackend):
             "content": self._build_content(user_content, images),
         })
 
-        max_tokens = 30 if images else 80
+        max_tokens = 30 if images else 512
 
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens,
             "stream": True,
-            "temperature": 0,
+            # temp=0 for vision (deterministic labels), 0.7 for text
+            "temperature": 0 if images else 0.7,
         }
         if tools:
             kwargs["tools"] = tools
 
         buffer = ""
         sentence_pattern = re.compile(r'[.!?:]\s+')
+        clause_pattern = re.compile(r'[,;\u2014]\s+')  # comma, semicolon, em-dash
+        first_chunk_yielded = False
         # Accumulate tool call deltas: {index: {name, arguments_str}}
         tool_calls_acc: dict[int, dict] = {}
 
@@ -697,12 +708,17 @@ class VLLMLLM(LLMBackend):
 
                 buffer += content
 
-                match = sentence_pattern.search(buffer)
+                # First chunk: clause boundary for faster TTFA; then sentence boundary
+                pattern = clause_pattern if not first_chunk_yielded else sentence_pattern
+                match = pattern.search(buffer)
+                if not match and not first_chunk_yielded:
+                    match = sentence_pattern.search(buffer)
                 if match:
                     end_pos = match.end()
                     sentence = buffer[:end_pos].strip()
                     buffer = buffer[end_pos:].strip()
                     if sentence and len(sentence) > 2:
+                        first_chunk_yielded = True
                         yield sentence
 
         except Exception as e:

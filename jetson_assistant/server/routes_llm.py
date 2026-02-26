@@ -211,6 +211,8 @@ async def chat_stream(request: ChatRequest):
 
         buffer = ""
         sentence_pattern = re.compile(r'[.!?:]\s+')
+        clause_pattern = re.compile(r'[,;\u2014]\s+')  # comma, semicolon, em-dash
+        first_chunk_yielded = False
 
         try:
             for chunk in client.chat(
@@ -228,14 +230,18 @@ async def chat_stream(request: ChatRequest):
 
                 buffer += content
 
-                # Check for complete sentences
-                match = sentence_pattern.search(buffer)
+                # First chunk: clause boundary for faster TTFA; then sentence boundary
+                pattern = clause_pattern if not first_chunk_yielded else sentence_pattern
+                match = pattern.search(buffer)
+                if not match and not first_chunk_yielded:
+                    match = sentence_pattern.search(buffer)
                 if match:
                     end_pos = match.end()
                     sentence = buffer[:end_pos].strip()
                     buffer = buffer[end_pos:].strip()
 
                     if sentence and len(sentence) > 2:
+                        first_chunk_yielded = True
                         yield f"data: {json.dumps({'type': 'chunk', 'content': sentence})}\n\n"
 
             # Yield remaining buffer

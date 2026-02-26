@@ -63,7 +63,7 @@ ARG EXTRAS_nano=whisper,piper,search
 # Same SBSA constraint as Thor: pin to 2.9.1, no torchvision.
 ARG PYTORCH_INDEX_spark=https://pypi.jetson-ai-lab.io/sbsa/cu130
 ARG PYTORCH_PKGS_spark="torch==2.9.1 torchaudio==2.9.1"
-ARG INSTALL_FLASH_ATTN_spark=false
+ARG INSTALL_FLASH_ATTN_spark=true
 ARG DEFAULT_CONFIG_spark=configs/spark.yaml
 ARG EXTRAS_spark=kokoro,nemotron,vision,search
 
