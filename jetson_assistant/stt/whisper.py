@@ -102,8 +102,8 @@ class WhisperBackend(STTBackend):
         sample_rate: int,
         language: str | None = None,
         task: str = "transcribe",
-        beam_size: int = 5,
-        word_timestamps: bool = True,
+        beam_size: int = 1,
+        word_timestamps: bool = False,
         **kwargs,
     ) -> TranscriptionResult:
         """

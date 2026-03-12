@@ -242,8 +242,10 @@ class VoiceAssistant:
     _SLOW_TOOLS = frozenset({"web_search", "look", "search", "describe_scene"})
 
     _VISUAL_PATTERNS = re.compile(
-        r"\b(see|look|show|describe|camera|picture|image|photo|color|holding|wearing|read)\b"
+        r"\b(what do you see|describe what you see|check.*camera|show me what"
+        r"|can you see|do you see|what are you looking at)\b"
         r"|\bwhat(?:'s|\s+is)\s+(this|that|here|there)\b"
+        r"|\b(camera|picture|image|photo)\b"
         r"|\bin front\b",
         re.IGNORECASE,
     )
@@ -253,22 +255,42 @@ class VoiceAssistant:
         """Regex fallback for vision gating (used when no LLM router available)."""
         return bool(VoiceAssistant._VISUAL_PATTERNS.search(text))
 
-    def _classify_intent(self, text: str) -> str:
-        """Classify user intent via fast LLM call (~90ms).
+    # Regex fast-path patterns that skip the 90ms LLM classify_intent call
+    _TOOL_FAST_PATTERNS = re.compile(
+        r'\b(what do you see|what\'s? (?:in|on) (?:the|my)|look at|check .* camera|show me|describe what|'
+        r'watch .* camera|stop watch|list camera|how many camera|set timer|what time|'
+        r'set language|add camera|what cameras)\b',
+        re.IGNORECASE,
+    )
+    _CHAT_FAST_PATTERNS = re.compile(
+        r'^(hi|hello|hey|tell me (?:a |about )|sing |what is |who is |how (?:are|do) |'
+        r'can you |please |thank|good (?:morning|evening|night)|'
+        r'write |create |make |generate )\b',
+        re.IGNORECASE,
+    )
 
-        Returns 'TOOL' or 'CHAT'. When tools are registered, all vision
-        queries route to TOOL (handled by check_camera/reachy_see tools).
-        Falls back to regex-based _has_visual_intent when LLM unavailable.
+    def _classify_intent(self, text: str) -> str:
+        """Classify user intent — regex fast-path first, LLM fallback.
+
+        Returns 'TOOL' or 'CHAT'. Regex catches ~80% of queries in <1ms,
+        avoiding the 90ms LLM classify_intent call.
         """
-        # Only use router when we have both LLM and tools
+        # No tools = everything is CHAT
         if self.llm is None or not (self._tools and self._tools.definitions()):
             return "CHAT"
 
+        # Fast regex path — skip LLM call entirely
+        if self._TOOL_FAST_PATTERNS.search(text):
+            return "TOOL"
+        if self._CHAT_FAST_PATTERNS.search(text):
+            return "CHAT"
+
+        # Ambiguous — fall back to LLM classification
         result = self.llm.classify_intent(text, self._INTENT_ROUTER_PROMPT)
         if result and result in ("TOOL", "CHAT"):
             return result
 
-        # Fallback: treat as TOOL if it looks like a command
+        # Default to TOOL if tools are loaded
         return "TOOL"
 
     def _capture_vision_async(self) -> Future:
@@ -684,11 +706,13 @@ class VoiceAssistant:
 
     def _init_camera_pool(self) -> None:
         """Initialize multi-camera pool from config file."""
+        import sys
         try:
             from jetson_assistant.assistant.cameras import CameraPool
             from pathlib import Path
 
             config_path = Path(self.config.camera_config_path).expanduser()
+            print(f"[CAMERA] CameraPool config: {config_path} exists={config_path.exists()}", file=sys.stderr, flush=True)
             self._camera_pool = CameraPool(config_path)
 
             # Auto-register local USB camera if available
@@ -716,7 +740,8 @@ class VoiceAssistant:
                 logger.info("CameraPool: no cameras configured")
 
         except Exception as e:
-            logger.error("CameraPool: init error: %s", e)
+            import sys
+            print(f"[CAMERA] CameraPool init error: {e}", file=sys.stderr, flush=True)
             self._camera_pool = None
 
     def _init_multi_watch(self) -> None:
@@ -787,9 +812,11 @@ class VoiceAssistant:
 
         # Register browser webcam as "local" camera if no USB camera available.
         # Browser POSTs JPEG frames to /frame → stored in _browser_frame_jpeg.
+        import sys
+        print(f"[CAMERA] _camera_pool={self._camera_pool is not None} has_local={self._camera_pool.has('local') if self._camera_pool else 'N/A'}", file=sys.stderr, flush=True)
         if self._camera_pool is not None and not self._camera_pool.has("local"):
             self._camera_pool.add_browser(self._vision_preview)
-            logger.info("CameraPool: registered browser webcam as 'local'")
+            print("[CAMERA] Registered browser webcam as 'local'", file=sys.stderr, flush=True)
 
     def _emit_debug(self, stage: str, data: str) -> None:
         """Send debug info to the transcript page debug panel."""
@@ -1376,8 +1403,10 @@ class VoiceAssistant:
             description = ""
             if self.llm is not None:
                 try:
+                    # Pass conversation context so vision queries have memory
+                    context = self._get_conversation("local")[-6:]
                     response = self._vlm_call_with_priority(
-                        lambda: self.llm.generate(question, images=[frame_b64]),
+                        lambda: self.llm.generate(question, context=context, images=[frame_b64]),
                         is_user_request=True,
                     )
                     description = response.text.strip()
@@ -1738,12 +1767,16 @@ class VoiceAssistant:
         """Stop the assistant."""
         self._running = False
 
+    _dbg_audio_count = 0
+
     def _on_audio_chunk(self, audio: np.ndarray) -> None:
         """
         Callback for each audio chunk from microphone.
 
         Implements the state machine.
         """
+        import sys
+        self._dbg_audio_count += 1
         if self.state == AssistantState.SPEAKING:
             # Browser clients: barge-in is safe (no speaker→mic echo loop).
             # Detect speech via VAD and fire the barge-in event to stop TTS.
@@ -1782,7 +1815,8 @@ class VoiceAssistant:
                 return
 
             # Check for wake word
-            if self.wakeword.detect(audio):
+            ww_result = self.wakeword.detect(audio)
+            if ww_result:
                 self._on_wake_detected()
 
         elif self.state == AssistantState.LISTENING:
@@ -1790,16 +1824,18 @@ class VoiceAssistant:
             self._audio_buffer.append(audio.copy())
 
             # Check for timeout
-            if time.time() - self._listen_start_time > self.config.max_listen_time_s:
+            elapsed = time.time() - self._listen_start_time
+            if elapsed > self.config.max_listen_time_s:
                 self._on_listen_complete()
                 return
 
             # Check for end of speech (silence after talking)
-            if self.vad.detect_end_of_speech(
+            is_eos = self.vad.detect_end_of_speech(
                 audio,
                 silence_threshold_ms=self.config.silence_timeout_ms,
                 chunk_duration_ms=self.audio_config.chunk_duration_ms,
-            ):
+            )
+            if is_eos:
                 self._on_listen_complete()
 
     def _on_wake_detected(self) -> None:
@@ -1815,8 +1851,8 @@ class VoiceAssistant:
 
         self._update_preview(state="LISTENING")
 
-        # Play chime
-        if self.config.play_chimes:
+        # Play chime (skip for browser clients — aplay fails on headless)
+        if self.config.play_chimes and not (self._vision_preview and self._vision_preview.has_browser_client):
             try:
                 self.audio_output.play_blocking(
                     self.chimes.wake_chime(),
@@ -1839,7 +1875,8 @@ class VoiceAssistant:
         self._set_state(AssistantState.PROCESSING)
 
         # Play thinking chime to indicate processing
-        if self.config.play_chimes:
+        # Skip chime for browser clients — aplay fails on headless servers
+        if self.config.play_chimes and not (self._vision_preview and self._vision_preview.has_browser_client):
             try:
                 self.audio_output.play_blocking(
                     self.chimes.thinking_chime(),
@@ -1856,20 +1893,12 @@ class VoiceAssistant:
 
     # Known Whisper hallucination patterns (generated on silence/noise)
     _HALLUCINATION_PATTERNS = {
-        "thank you",
         "thanks for watching",
         "please subscribe",
         "subscribe to my channel",
         "like and subscribe",
         "see you in the next video",
         "i'll see you in the next",
-        "i'm sorry",
-        "bye",
-        "goodbye",
-        "you",
-        "oh",
-        "hmm",
-        "the end",
         "silence",
     }
 
@@ -1917,20 +1946,24 @@ class VoiceAssistant:
 
     def _process_speech(self) -> None:
         """Process recorded speech: STT -> LLM -> TTS."""
+        import sys
         try:
             # Concatenate audio buffer
             if not self._audio_buffer:
+                print("[PROCESS] empty buffer, returning to IDLE", file=sys.stderr, flush=True)
                 self._set_state(AssistantState.IDLE)
                 return
 
             audio = np.concatenate(self._audio_buffer)
             self._audio_buffer = []
+            print(f"[PROCESS] audio={len(audio)} samples ({len(audio)/self.config.input_sample_rate:.1f}s)", file=sys.stderr, flush=True)
 
             # Audio energy gate — skip if too quiet (no actual speech)
+            # Browser audio with AGC/noise-suppression can be quieter than local mic
             rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2)))
-            if rms < 0.02:
-                if self.config.verbose:
-                    logger.debug("(rejected: audio too quiet, RMS=%.4f)", rms)
+            energy_threshold = 0.005 if (self._vision_preview and self._vision_preview.has_browser_client) else 0.02
+            if rms < energy_threshold:
+                print(f"[PROCESS] rejected: too quiet RMS={rms:.4f} < {energy_threshold}", file=sys.stderr, flush=True)
                 self._set_state(AssistantState.IDLE)
                 return
 
@@ -1943,24 +1976,23 @@ class VoiceAssistant:
             )
             user_text = result.text.strip()
             stt_time = time.perf_counter() - start
+            print(f"[PROCESS] STT={stt_time*1000:.0f}ms text=\"{user_text}\"", file=sys.stderr, flush=True)
 
             if not user_text:
-                logger.debug("(no speech detected)")
+                print("[PROCESS] rejected: empty text", file=sys.stderr, flush=True)
                 self._set_state(AssistantState.IDLE)
                 return
 
             word_count = len(user_text.split())
 
             if word_count < self.config.stt_min_words:
-                if self.config.verbose:
-                    logger.debug("(rejected: too few words)")
+                print(f"[PROCESS] rejected: too few words ({word_count} < {self.config.stt_min_words})", file=sys.stderr, flush=True)
                 self._set_state(AssistantState.IDLE)
                 return
 
             # Filter known Whisper hallucinations
             if self._is_hallucination(user_text):
-                if self.config.verbose:
-                    logger.debug("(rejected: hallucination) \"%s\"", user_text)
+                print(f"[PROCESS] rejected: hallucination \"{user_text}\"", file=sys.stderr, flush=True)
                 self._set_state(AssistantState.IDLE)
                 return
 
@@ -1969,8 +2001,8 @@ class VoiceAssistant:
             if self._vision_preview is not None:
                 self._vision_preview.add_transcript("user", user_text)
 
-            if self.config.verbose:
-                logger.debug("STT: %.0fms", stt_time * 1000)
+            import sys
+            print(f"[PIPELINE] STT={stt_time*1000:.0f}ms text=\"{user_text[:60]}\"", file=sys.stderr, flush=True)
             if self._vision_preview is not None:
                 self._vision_preview.add_timing("stt", stt_time * 1000)
 
@@ -1989,6 +2021,64 @@ class VoiceAssistant:
                 self._get_conversation("local").append({"role": "user", "content": user_text})
                 self._get_conversation("local").append({"role": "assistant", "content": watch_response})
                 self._set_state(AssistantState.IDLE)
+                return
+
+            # Fast-path: vision queries bypass the tool-routing LLM call entirely.
+            # "What do you see?" normally goes: LLM(tool route) → check_camera → VLM(image).
+            # This skips the first LLM call (~1.8s), saving ~40% of vision E2E.
+            # IMPORTANT: Only match explicit camera/vision queries, NOT robot body
+            # commands like "look left/right" which use the look tool.
+            _VISION_FAST_RE = re.compile(
+                r'\b(what do you see|what.*in the (?:camera|image|picture|photo)|'
+                r'describe what you see|check.*camera|show me what|'
+                r'what(?:\'s| is) (?:this|that|here|there)|'
+                r'can you see|do you see|what are you looking at)\b',
+                re.IGNORECASE,
+            )
+            if (
+                _VISION_FAST_RE.search(user_text)
+                and self._camera_pool is not None
+                and self._camera_pool.has("local")
+                and self._tools
+            ):
+                self._set_state(AssistantState.SPEAKING)
+                vis_start = time.perf_counter()
+                description = ""
+                try:
+                    question = user_text if len(user_text.split()) > 4 else "Describe what you see in this image concisely."
+                    result = self._dispatch_command("check_camera", {"camera_name": "local", "question": question})
+                    description = result.get("description", "I couldn't see anything.")
+                    vis_ms = (time.perf_counter() - vis_start) * 1000
+                    print(f"[PIPELINE] VISION_FAST={vis_ms:.0f}ms", file=sys.stderr, flush=True)
+                    if self._vision_preview is not None:
+                        self._vision_preview.add_timing("llm", vis_ms)
+                    logger.info("Assistant (vision): %s", description[:100])
+                    # Send transcript immediately so text appears while audio plays.
+                    # Pass skip_transcript=True to TTS worker so it doesn't create
+                    # a duplicate .msg-streaming div (which caused the ghost bubble
+                    # that made the next response appear under the wrong message).
+                    if self._vision_preview is not None:
+                        self._vision_preview.add_transcript("assistant", description)
+                    # Clear barge-in — mic noise during the VLM call can
+                    # falsely trigger it, causing TTS to be silently skipped.
+                    self._bargein_event.clear()
+                    self._tts_queue.put((
+                        description,
+                        self.config.tts_voice,
+                        self.config.tts_language,
+                        True,  # skip_transcript — we already sent it above
+                    ))
+                    self._tts_queue.join()
+                    self._get_conversation("local").append({"role": "user", "content": user_text})
+                    self._get_conversation("local").append({"role": "assistant", "content": description})
+                except Exception as e:
+                    logger.error("Vision fast-path error: %s", e)
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+                self._set_state(AssistantState.IDLE)
+                self._update_preview(state="IDLE")
+                if self.config.on_response:
+                    self.config.on_response(description)
                 return
 
             # Fast-path: force web_search for news/latest queries (LLM is unreliable)
@@ -2026,11 +2116,10 @@ class VoiceAssistant:
                 vision_future = self._capture_vision_async()
 
             # Use fewer history turns when tools are active — the tool system
-            # prompt is large and 7B models lose instruction-following with
-            # too much context.
+            # prompt is large. Nemotron 12B handles 5 turns well (8K context).
             max_turns = self.config.conversation_history
-            if self._tools and self._tools.definitions() and max_turns > 3:
-                max_turns = 3
+            if self._tools and self._tools.definitions() and max_turns > 5:
+                max_turns = 5
             context = self._get_conversation("local")[-max_turns * 2 :]
 
             # Intent router: fast LLM classification (~90ms) decides whether
@@ -2201,7 +2290,10 @@ class VoiceAssistant:
                                     llm_time = time.perf_counter() - llm_start
                                     logger.debug("LLM: %.0fms", llm_time * 1000)
                                 if self._vision_preview is not None:
-                                    self._vision_preview.add_timing("llm", (time.perf_counter() - llm_start) * 1000)
+                                    _llm_ms = (time.perf_counter() - llm_start) * 1000
+                                    self._vision_preview.add_timing("llm", _llm_ms)
+                                    import sys
+                                    print(f"[PIPELINE] LLM={_llm_ms:.0f}ms (first token)", file=sys.stderr, flush=True)
 
                         if buffer_mode:
                             # Accumulate — will parse as tool call after stream ends
@@ -2444,12 +2536,12 @@ class VoiceAssistant:
                 end = min(offset + chunk_samples, len(audio_data))
                 sub = audio_data[offset:end]
                 self._vision_preview.queue_tts_audio(sub, sample_rate)
-                # Pace at 95% of real-time: browser plays at 1x, we deliver
-                # at ~1.05x.  The 5% margin lets the jitter buffer build
-                # gradually without the "hurried" audio artefact that the
-                # old 75% (1.33x) factor caused.
-                time.sleep(len(sub) / sample_rate * 0.95)
                 offset = end
+            # NO sleep — the browser AudioWorklet has a 10s ring buffer that
+            # handles pacing.  Sleeping here blocks the _tts_worker thread,
+            # preventing the next sentence from being synthesized while the
+            # current one is still playing.  Without the sleep, TTS synthesis
+            # of sentence N+1 overlaps with playback of sentence N.
         else:
             self.audio_output.play_blocking(audio_data, sample_rate)
 
@@ -2480,7 +2572,13 @@ class VoiceAssistant:
                 self._tts_queue.task_done()
                 break
 
-            sentence, voice, lang = item
+            # Support optional 4th element to suppress transcript streaming
+            # (used by vision fast-path which sends its own transcript)
+            if len(item) == 4:
+                sentence, voice, lang, skip_transcript = item
+            else:
+                sentence, voice, lang = item
+                skip_transcript = False
 
             try:
                 # Skip if user barged in
@@ -2505,6 +2603,8 @@ class VoiceAssistant:
                                 tts_ms = (time.perf_counter() - self._tts_timing_start) * 1000
                                 if self._vision_preview is not None:
                                     self._vision_preview.add_timing("tts", tts_ms)
+                                import sys
+                                print(f"[PIPELINE] TTS={tts_ms:.0f}ms (first audio chunk)", file=sys.stderr, flush=True)
                                 del self._tts_timing_start
                             # Feed audio to external tool plugins (e.g. Reachy
                             # MotionManager) for audio-reactive motion.  Chunks
@@ -2525,7 +2625,7 @@ class VoiceAssistant:
                             self._tts_cache.put(sentence, voice, lang, full_audio, sr)
 
                         # Stream sentence to transcript overlay
-                        if self._vision_preview is not None:
+                        if self._vision_preview is not None and not skip_transcript:
                             self._vision_preview.add_transcript_stream(sentence)
                         continue  # Already played chunks inline; skip to next item
                     else:
@@ -2553,7 +2653,7 @@ class VoiceAssistant:
                 self._play_chunk(audio_data, sample_rate)
 
                 # Stream sentence to transcript overlay
-                if self._vision_preview is not None:
+                if self._vision_preview is not None and not skip_transcript:
                     self._vision_preview.add_transcript_stream(sentence)
             except Exception as exc:
                 logger.error("TTS worker error: %s", exc)

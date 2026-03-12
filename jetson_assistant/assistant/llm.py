@@ -594,21 +594,19 @@ class VLLMLLM(LLMBackend):
 
         user_content = prompt
         if images:
-            user_content = f"BRIEF answer, max 15 words. {prompt}"
+            user_content = f"Describe concisely in 1-2 sentences. {prompt}"
 
         messages.append({
             "role": "user",
             "content": self._build_content(user_content, images),
         })
 
-        max_tokens = 30 if images else 512
+        max_tokens = 150 if images else 512
 
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens,
-            # temp=0 for vision (deterministic labels), 0.7 for text
-            # (creative responses, avoids RLHF refusal patterns)
             "temperature": 0 if images else 0.7,
         }
         if tools:
@@ -655,21 +653,20 @@ class VLLMLLM(LLMBackend):
 
         user_content = prompt
         if images:
-            user_content = f"BRIEF answer, max 15 words. {user_content}"
+            user_content = f"Describe concisely in 1-2 sentences. {user_content}"
 
         messages.append({
             "role": "user",
             "content": self._build_content(user_content, images),
         })
 
-        max_tokens = 30 if images else 512
+        max_tokens = 150 if images else 512
 
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens,
             "stream": True,
-            # temp=0 for vision (deterministic labels), 0.7 for text
             "temperature": 0 if images else 0.7,
         }
         if tools:

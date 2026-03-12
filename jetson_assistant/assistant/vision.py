@@ -902,7 +902,7 @@ class VisionPreview:
                         data = _json.dumps(e)
                         await resp.write(f"data: {data}\n\n".encode())
                         last_id = e["id"]
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.1)
             except (ConnectionResetError, ConnectionError):
                 pass
             return resp
@@ -929,11 +929,17 @@ class VisionPreview:
                 "input_sample_rate": 16000,
             })
 
+            _recv_count = 0
             async def recv_loop():
+                nonlocal _recv_count
                 async for msg in ws:
                     if msg.type == aiohttp.WSMsgType.BINARY:
                         pcm = np.frombuffer(msg.data, dtype=np.int16)
                         audio_f32 = pcm.astype(np.float32) / 32768.0
+                        _recv_count += 1
+                        if _recv_count <= 3 or _recv_count % 50 == 0:
+                            import sys
+                            print(f"[WS-RECV] chunk#{_recv_count} samples={len(audio_f32)} rms={float(np.sqrt(np.mean(audio_f32**2))):.4f} callback={'yes' if preview._audio_callback else 'NO'}", file=sys.stderr, flush=True)
                         if preview._audio_callback:
                             preview._audio_callback(audio_f32)
                     elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):

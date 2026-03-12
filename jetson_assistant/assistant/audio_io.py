@@ -348,16 +348,20 @@ class AudioInput:
             # Use larger buffer to prevent overflow
             # blocksize=0 lets PortAudio choose optimal size
             # extra_settings for even larger ALSA buffer
-            self._stream = self._sd.InputStream(
-                samplerate=self.config.sample_rate,
-                channels=self.config.channels,
-                dtype=self.config.dtype,
-                blocksize=self.config.chunk_size * 2,  # Double chunk size
-                device=self.device,
-                callback=self._audio_callback,
-                latency=0.5,  # 500ms latency for large buffer
-            )
-            self._stream.start()
+            try:
+                self._stream = self._sd.InputStream(
+                    samplerate=self.config.sample_rate,
+                    channels=self.config.channels,
+                    dtype=self.config.dtype,
+                    blocksize=self.config.chunk_size * 2,  # Double chunk size
+                    device=self.device,
+                    callback=self._audio_callback,
+                    latency=0.5,  # 500ms latency for large buffer
+                )
+                self._stream.start()
+            except Exception:
+                logger.warning("No audio input device available — browser WebSocket audio only")
+                self._stream = None
 
     def _start_arecord(self) -> None:
         """Start audio capture via arecord subprocess (PortAudio fallback)."""

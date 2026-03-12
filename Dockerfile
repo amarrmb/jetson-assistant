@@ -65,7 +65,7 @@ ARG PYTORCH_INDEX_spark=https://pypi.jetson-ai-lab.io/sbsa/cu130
 ARG PYTORCH_PKGS_spark="torch==2.9.1 torchaudio==2.9.1"
 ARG INSTALL_FLASH_ATTN_spark=true
 ARG DEFAULT_CONFIG_spark=configs/spark.yaml
-ARG EXTRAS_spark=kokoro,nemotron,vision,search
+ARG EXTRAS_spark=kokoro,nemotron,whisper,vision,search
 
 LABEL org.opencontainers.image.source="https://github.com/amarrmb/jetson-assistant" \
       org.opencontainers.image.description="On-device voice + vision AI for NVIDIA Jetson" \
